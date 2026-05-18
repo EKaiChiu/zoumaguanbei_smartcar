@@ -2,62 +2,66 @@
 #include "image.hpp"
 
 
-/*
- * Migrated from car_walk.c:
- *   Err_Sum()      -> calc_weighted_error()
- *   PD_Camera()    -> calc_turn_output()
- *   judge_inc()    -> trackline_refresh_wheel_targets()
- *
- * Sign convention:
- *   track_error > 0: center line is left of image center, turn left.
- *   track_error < 0: center line is right of image center, turn right.
- */
-
-
-#define TRACK_DIR 1
-
-/*
- * The original car_walk.c overwrites PWM_turn with u before returning.
- * Keep this 0 to use the full migrated camera + gyro PD output.
- * Set to 1 only if you want to reproduce that original behavior exactly.
- */
-#define TRACK_RETURN_RAW_CAMERA_U 0
-
-
+// =====================================================
+// 左右轮目标速度
+// =====================================================
 static int wheel_target_right = 0;
-static int wheel_target_left = 0;
+static int wheel_target_left  = 0;
 
-static float track_error = 0.0f;
+
+// =====================================================
+// 巡线误差和转向输出
+// =====================================================
+static float Err = 0.0f;
 static float turn_output = 0.0f;
 
-static float camera_p = 0.41f;
-static float camera_d = 0.01f;
 
-static float target_turn_kp = 1.0f;
-static float target_gyro_z_kp = 1.7f;
+// =====================================================
+// 摄像头 PD 参数
+// 对应原代码：P=0.41, D=0.01
+// =====================================================
+static float camera_P = 0.41f;
+static float camera_D = 0.01f;
 
-static float error_turn_kp = 12.0f;
-static float error_turn_kd = 1.7f;
-
-static float camera_error_last = 0.0f;
-static float error_turn_last = 0.0f;
-static float smooth_turn[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
-static float gyro_z = 0.0f;
+static float error_last = 0.0f;
 
 
+// =====================================================
+// 输出滤波缓存
+// 对应原代码 Pre1_Error[4]
+// =====================================================
+static float Pre1_Error[4] = {0, 0, 0, 0};
+
+
+// =====================================================
+// 差速放大系数
+// 转向力度不够就加大，比如 1.5 / 2.0 / 2.5
+// =====================================================
+static float diff_gain = 1.0f;
+
+
+// =====================================================
+// 方向修正
+// 如果发现转向方向反了，把 1 改成 -1
+// =====================================================
+#define TRACK_DIR 1
+
+
+// =====================================================
+// 限幅函数
+// =====================================================
 static int limit_int(int value, int min_value, int max_value)
 {
-    if(value < min_value) value = min_value;
-    if(value > max_value) value = max_value;
-    return value;
-}
+    if(value < min_value)
+    {
+        value = min_value;
+    }
 
+    if(value > max_value)
+    {
+        value = max_value;
+    }
 
-static float limit_float(float value, float min_value, float max_value)
-{
-    if(value < min_value) value = min_value;
-    if(value > max_value) value = max_value;
     return value;
 }
 
@@ -68,301 +72,287 @@ static int abs_int(int value)
 }
 
 
-static int get_half_road_width(int y)
+// =====================================================
+// 行权重
+//
+// 原代码 Weight[] 是针对 MT9V03X_H 的。
+// 这里按你的 image_h 动态生成权重。
+// 图像中下部权重大，远处和最底部权重小。
+// =====================================================
+static int get_weight_by_y(int y)
 {
     y = limit_int(y, 0, image_h - 1);
 
-    int top_half = image_w / 6;
-    int bottom_half = image_w / 3;
-
-    return top_half + (bottom_half - top_half) * y / (image_h - 1);
-}
-
-
-static int get_center_by_row(int y)
-{
-    y = limit_int(y, 0, image_h - 1);
-
-    int center = center_line[y];
-    int left = l_border[y];
-    int right = r_border[y];
-
-    int left_valid = 1;
-    int right_valid = 1;
-
-    if(left <= border_min + 1)
-    {
-        left_valid = 0;
-    }
-
-    if(right >= border_max - 1)
-    {
-        right_valid = 0;
-    }
-
-    if(right <= left)
-    {
-        left_valid = 0;
-        right_valid = 0;
-    }
-
-    if(center > border_min + 2 && center < border_max - 2)
-    {
-        return center;
-    }
-
-    int half_width = get_half_road_width(y);
-
-    if(left_valid && !right_valid)
-    {
-        return limit_int(left + half_width, border_min, border_max);
-    }
-
-    if(!left_valid && right_valid)
-    {
-        return limit_int(right - half_width, border_min, border_max);
-    }
-
-    if(left_valid && right_valid)
-    {
-        return (left + right) / 2;
-    }
-
-    return image_w / 2;
-}
-
-
-/*
- * Replacement for the MT9V03X_H fixed Weight[] table.
- * It keeps the same idea: lower-middle rows get much higher weight,
- * top rows and very near rows stay light.
- */
-static int get_row_weight(int y)
-{
-    int peak_y = image_h * 3 / 4;
-    int distance = abs_int(y - peak_y);
-    int span = image_h / 5;
-
-    if(distance >= span)
+    /*
+        y 越大，越靠近图像底部。
+        这里主要看中下部。
+    */
+    if(y < image_h * 1 / 3)
     {
         return 1;
     }
-
-    return 1 + (span - distance) * 20 / span;
+    else if(y < image_h * 1 / 2)
+    {
+        return 2;
+    }
+    else if(y < image_h * 2 / 3)
+    {
+        return 8;
+    }
+    else if(y < image_h * 5 / 6)
+    {
+        return 16;
+    }
+    else
+    {
+        return 6;
+    }
 }
 
 
-static float calc_weighted_error(int scan_rows)
+// =====================================================
+// 初始化 trackline
+//
+// kp 对应原代码 P
+// ki 暂时不用
+// kd 对应原代码 D
+// =====================================================
+void trackline_init(float kp, float ki, float kd)
 {
-    int image_mid = image_w / 2;
-    int valid_rows = limit_int(scan_rows, 1, image_h - 1);
+    (void)ki;
 
-    if(Search_Stop_Line > 0)
-    {
-        valid_rows = limit_int(Search_Stop_Line, 1, image_h - 1);
-    }
+    camera_P = kp;
+    camera_D = kd;
 
-    float err_sum = 0.0f;
-    float weight_sum = 0.0f;
-
-    int start_y = image_h - 1;
-    int stop_y = image_h - valid_rows - 1;
-
-    stop_y = limit_int(stop_y, 0, image_h - 1);
-
-    for(int y = start_y; y >= stop_y; y--)
-    {
-        int center = get_center_by_row(y);
-        int weight = get_row_weight(y);
-
-        err_sum += (float)(image_mid - center) * (float)weight;
-        weight_sum += (float)weight;
-    }
-
-    if(weight_sum <= 0.0f)
-    {
-        return 0.0f;
-    }
-
-    return err_sum / weight_sum;
-}
-
-
-static float calc_turn_output(float expect_val, float err)
-{
-    float error_current = err - expect_val;
-    float camera_u = camera_p * error_current
-                   + camera_d * (error_current - camera_error_last);
-
-    camera_error_last = error_current;
-
-    float error_turn = camera_u * target_turn_kp
-                     - gyro_z * target_gyro_z_kp;
-
-    float pwm_turn = error_turn * error_turn_kp
-                   + (error_turn - error_turn_last) * error_turn_kd;
-
-    error_turn_last = error_turn;
-
-    smooth_turn[3] = smooth_turn[2];
-    smooth_turn[2] = smooth_turn[1];
-    smooth_turn[1] = smooth_turn[0];
-    smooth_turn[0] = pwm_turn;
-
-    pwm_turn = smooth_turn[0] * 0.80f
-             + smooth_turn[1] * 0.10f
-             + smooth_turn[2] * 0.06f
-             + smooth_turn[3] * 0.04f;
-
-#if TRACK_RETURN_RAW_CAMERA_U
-    return camera_u;
-#else
-    return pwm_turn;
-#endif
-}
-
-
-void trackline_init(float p, float i, float d)
-{
-    (void)i;
-
-    camera_p = p;
-    camera_d = d;
-
-    camera_error_last = 0.0f;
-    error_turn_last = 0.0f;
-
-    smooth_turn[0] = 0.0f;
-    smooth_turn[1] = 0.0f;
-    smooth_turn[2] = 0.0f;
-    smooth_turn[3] = 0.0f;
-
-    gyro_z = 0.0f;
-
-    track_error = 0.0f;
+    Err = 0.0f;
     turn_output = 0.0f;
+    error_last = 0.0f;
 
     wheel_target_right = 0;
     wheel_target_left = 0;
+
+    Pre1_Error[0] = 0.0f;
+    Pre1_Error[1] = 0.0f;
+    Pre1_Error[2] = 0.0f;
+    Pre1_Error[3] = 0.0f;
 }
 
 
-void trackline_set_camera_pd(float p, float d)
+// =====================================================
+// 计算加权误差
+//
+// 原代码：
+// err += (Image_MID - ((Left_Line[i] + Right_Line[i]) >> 1)) * Weight[i];
+//
+// 当前工程：
+// err += (image_w / 2 - center_line[i]) * weight;
+// =====================================================
+static float Err_Sum(int aim_y)
 {
-    camera_p = p;
-    camera_d = d;
+    float err = 0.0f;
+    float weight_count = 0.0f;
+
+    int image_mid = image_w / 2;
+
+    int start_y = image_h - 2;
+    int end_y = aim_y;
+
+    end_y = limit_int(end_y, 0, image_h - 2);
+
+    /*
+        如果 Search_Stop_Line 有效，就不要使用看不见的区域。
+        Search_Stop_Line 表示从底部向上可见的有效白列高度。
+    */
+    if(Search_Stop_Line > 5 && Search_Stop_Line < image_h)
+    {
+        int visible_top = image_h - Search_Stop_Line;
+
+        if(visible_top > end_y)
+        {
+            end_y = visible_top;
+        }
+    }
+
+    for(int y = start_y; y >= end_y; y--)
+    {
+        int center = center_line[y];
+
+        /*
+            中线异常就跳过
+        */
+        if(center <= border_min || center >= border_max)
+        {
+            continue;
+        }
+
+        int weight = get_weight_by_y(y);
+
+        err += (float)(image_mid - center) * weight;
+        weight_count += weight;
+    }
+
+    if(weight_count <= 0.0f)
+    {
+        return Err;
+    }
+
+    return err / weight_count;
 }
 
 
-void trackline_set_turn_pd(float p, float d)
+// =====================================================
+// 摄像头 PD
+//
+// 移植自原代码 PD_Camera()
+//
+// 原代码最后：
+// PWM_turn = (int16)(u + 0.5);
+// return PWM_turn;
+//
+// 这会把前面的陀螺仪修正和滤波结果覆盖掉。
+// 所以这里保留 PD + 滤波，不使用 imu660ra_gyro_z。
+// =====================================================
+static float PD_Camera(float expect_val, float err)
 {
-    error_turn_kp = p;
-    error_turn_kd = d;
+    float error_current = err - expect_val;
+    float error_delta = error_current - error_last;
+
+    float u = camera_P * error_current + camera_D * error_delta;
+
+    error_last = error_current;
+
+    /*
+        简单滤波，防止输出突变太大
+    */
+    Pre1_Error[3] = Pre1_Error[2];
+    Pre1_Error[2] = Pre1_Error[1];
+    Pre1_Error[1] = Pre1_Error[0];
+    Pre1_Error[0] = u;
+
+    float pwm_turn =
+          Pre1_Error[0] * 0.80f
+        + Pre1_Error[1] * 0.10f
+        + Pre1_Error[2] * 0.06f
+        + Pre1_Error[3] * 0.04f;
+
+    return pwm_turn;
 }
 
 
-void trackline_set_gyro_param(float gyro_kp)
-{
-    target_gyro_z_kp = gyro_kp;
-}
-
-
-void trackline_set_gyro_z(float value)
-{
-    gyro_z = value;
-}
-
-
+// =====================================================
+// 根据中线刷新左右轮目标速度
+//
+// 原代码：
+// increase = -PD_Camera(0, Err);
+// motor_A.target = Speed - increase;
+// motor_B.target = Speed + increase;
+//
+// 当前工程：
+// wheel_target_left/right 给 pid_speed_set_target() 使用。
+// =====================================================
 void trackline_refresh_wheel_targets(int base_speed, int aim_y)
 {
-    int scan_rows = image_h - aim_y;
+    /*
+        1. 计算多行加权误差
+        Err > 0：中线在图像左侧，需要左转
+        Err < 0：中线在图像右侧，需要右转
+    */
+    Err = Err_Sum(aim_y);
 
-    scan_rows = limit_int(scan_rows, 1, image_h - 1);
-
-    track_error = calc_weighted_error(scan_rows);
-
-    if(track_error > -2.0f && track_error < 2.0f)
+    /*
+        2. 小误差死区，防止直道左右抖
+    */
+    if(Err > -2.0f && Err < 2.0f)
     {
-        track_error = 0.0f;
+        Err = 0.0f;
     }
 
-    turn_output = calc_turn_output(0.0f, track_error);
-    turn_output = limit_float(turn_output * TRACK_DIR, -320.0f, 320.0f);
+    /*
+        3. 摄像头 PD 输出
+    */
+    turn_output = PD_Camera(0.0f, Err);
 
-    int abs_error = abs_int((int)track_error);
+    /*
+        4. 误差越大，基础速度越低
+    */
+    int abs_err = abs_int((int)Err);
+
     int run_speed = base_speed;
 
-    if(abs_error > 26 || Left_Lost_Time > image_h / 3 || Right_Lost_Time > image_h / 3)
-    {
-        int corner_speed = limit_int(base_speed, 80, 160);
-
-        if(track_error * TRACK_DIR > 0.0f)
-        {
-            wheel_target_left = 0;
-            wheel_target_right = corner_speed;
-        }
-        else if(track_error * TRACK_DIR < 0.0f)
-        {
-            wheel_target_left = corner_speed;
-            wheel_target_right = 0;
-        }
-        else
-        {
-            wheel_target_left = corner_speed;
-            wheel_target_right = corner_speed;
-        }
-
-        return;
-    }
-
-    if(abs_error > 22)
+    if(abs_err > 35)
     {
         run_speed = base_speed * 55 / 100;
     }
-    else if(abs_error > 14)
+    else if(abs_err > 25)
     {
-        run_speed = base_speed * 70 / 100;
+        run_speed = base_speed * 65 / 100;
+    }
+    else if(abs_err > 15)
+    {
+        run_speed = base_speed * 80 / 100;
+    }
+    else if(abs_err > 8)
+    {
+        run_speed = base_speed * 90 / 100;
     }
 
-    run_speed = limit_int(run_speed, 0, 700);
-
-    int increase = (int)(-turn_output);
+    run_speed = limit_int(run_speed, 80, 300);
 
     /*
-     * car_walk.c:
-     *   motor_A = Speed - increase
-     *   motor_B = Speed + increase
-     *
-     * Here:
-     *   left  = Speed - increase
-     *   right = Speed + increase
-     */
-    wheel_target_left = run_speed - increase;
-    wheel_target_right = run_speed + increase;
+        5. 差速量
+        原代码 increase = -PD_Camera(0, Err)
+    */
+    float increase = -turn_output * diff_gain * TRACK_DIR;
 
-    wheel_target_left = limit_int(wheel_target_left, 0, 700);
-    wheel_target_right = limit_int(wheel_target_right, 0, 700);
+    /*
+        6. 差速限幅
+    */
+    int diff = limit_int((int)increase, -220, 220);
+
+    /*
+        7. 生成左右轮目标速度
+    */
+    wheel_target_left  = run_speed - diff;
+    wheel_target_right = run_speed + diff;
+
+    /*
+        8. 限幅
+    */
+    wheel_target_left  = limit_int(wheel_target_left,  0, 600);
+    wheel_target_right = limit_int(wheel_target_right, 0, 600);
 }
 
 
+// =====================================================
+// 获取右轮目标速度
+// =====================================================
 int trackline_wheel_target_right(void)
 {
     return wheel_target_right;
 }
 
 
+// =====================================================
+// 获取左轮目标速度
+// =====================================================
 int trackline_wheel_target_left(void)
 {
     return wheel_target_left;
 }
 
 
+// =====================================================
+// 获取当前误差，方便显示调试
+// =====================================================
 float trackline_get_error(void)
 {
-    return track_error;
+    return Err;
 }
 
 
+// =====================================================
+// 获取当前转向输出，方便显示调试
+// =====================================================
 float trackline_get_turn_output(void)
 {
     return turn_output;
