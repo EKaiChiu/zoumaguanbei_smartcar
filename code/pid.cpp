@@ -20,18 +20,12 @@ static int target_speed_left  = 0;
 
 #define MAX_PWM_PERCENT      35
 
-/*
-    PID 输出限幅。
 
-    注意：
-    原代码 PID 输出限幅是 8000。
-    你现在这里是 PWM 微调，不建议一开始太大。
-*/
 #define PID_OUTPUT_LIMIT     700
 
 
 // =====================================================
-// 工具函数
+// 工具函数(整数绝对值、整数限幅、浮点数限幅)
 // =====================================================
 static int abs_int(int value)
 {
@@ -104,12 +98,6 @@ void pid_init(pid_class *pid, float Kp, float Ki, float Kd)
 
 // =====================================================
 // 速度环 PID
-//
-// 移植自你给的 PID_end()：
-// output = Kp * Error + Ki * Error_all + Kd * (Error - LastError)
-//
-// 说明：
-// 虽然原注释叫“增量式 PID”，但这个公式本质更接近位置式 PID。
 // =====================================================
 void pid_compute(pid_class *pid, int target, int measurement)
 {
@@ -149,8 +137,6 @@ void pid_compute(pid_class *pid, int target, int measurement)
 
 // =====================================================
 // 右电机底层 PWM 输出
-// pwm_signed > 0 正转
-// pwm_signed < 0 反转
 // =====================================================
 static void motor_set_pwm_R(int pwm_signed)
 {
@@ -223,11 +209,6 @@ void Motor_set_speed_L(float left_pwm)
 // =====================================================
 static void pid_speed_callback(void)
 {
-    /*
-        编码器方向：
-        你之前右轮用了负号，先保留。
-        如果发现速度反馈方向反了，再改这里。
-    */
     encoder_right = -encoder_dir_1.get_count();
     encoder_left  =  encoder_dir_2.get_count();
 
@@ -241,7 +222,7 @@ static void pid_speed_callback(void)
     int cmd_L = 0;
 
 
-    if(target_speed_right > 0)
+    if(target_speed_right > 0)//前驱反馈
     {
         int ff_R = base_pwm_R * target_speed_right / 300;
 

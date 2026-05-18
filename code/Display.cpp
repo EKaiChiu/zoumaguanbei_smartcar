@@ -2,7 +2,7 @@
 #include "pid.hpp"
 
 
-
+/*
 void display_image(ImageType type)
 {
     if(uvc_dev.wait_image_refresh() == 0)
@@ -27,7 +27,7 @@ void display_image(ImageType type)
         }
     }
 }
-
+*/
 
 // 显示 PID 参数
 void display_pid_data(void)
