@@ -362,27 +362,15 @@ int main(int, char **)
 
 
         // =====================================================
-        // 7. 根据斑马线状态选择停车或巡线
-        // 检测到斑马线后锁定停车
-        // 未检测到斑马线时正常巡线
+        // 7. 巡线
         // =====================================================
-        if(zebra_stop_flag)
-        {
-            pid_speed_set_target(0, 0);
-
-            drv8701e_pwm_1.set_duty(0);
-            drv8701e_pwm_2.set_duty(0);
-        }
-        else
-        {
-            trackline_refresh_wheel_targets(300, UVC_HEIGHT - 20);
+        
+        trackline_refresh_wheel_targets(300, UVC_HEIGHT - 20);
 
             pid_speed_set_target(
                 trackline_wheel_target_right(),
                 trackline_wheel_target_left()
             );
-        }
-
 
         // =====================================================
         // 8. 帧率统计
