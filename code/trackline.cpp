@@ -209,14 +209,6 @@ static float PD_Camera(float expect_val, float err)
 
 // =====================================================
 // 根据中线刷新左右轮目标速度
-//
-// 原代码：
-// increase = -PD_Camera(0, Err);
-// motor_A.target = Speed - increase;
-// motor_B.target = Speed + increase;
-//
-// 当前工程：
-// wheel_target_left/right 给 pid_speed_set_target() 使用。
 // =====================================================
 void trackline_refresh_wheel_targets(int base_speed, int aim_y)
 {
@@ -268,7 +260,6 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
 
     /*
         5. 差速量
-        原代码 increase = -PD_Camera(0, Err)
     */
     float increase = -turn_output * diff_gain * TRACK_DIR;
 
