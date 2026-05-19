@@ -12,26 +12,20 @@ uint8 center_line[image_h];
 
 int Road_Wide[image_h];
 
-int White_Column[image_w];
-
-int Search_Stop_Line = 0;
 
 int Left_Lost_Time = 0;
 int Right_Lost_Time = 0;
 int Both_Lost_Time = 0;
 
-int Boundry_Start_Left = 0;
-int Boundry_Start_Right = 0;
+int Boundry_Start_Left = 0;//左边界首次有效的行号
+int Boundry_Start_Right = 0;//右边界首次有效的行号
 
-int Longest_White_Column_Left[2] = {0};
-int Longest_White_Column_Right[2] = {0};
-
-int Left_Lost_Flag[image_h] = {0};
-int Right_Lost_Flag[image_h] = {0};
+int Left_Lost_Flag[image_h] = {0};  //每行左边界是否丢失
+int Right_Lost_Flag[image_h] = {0}; //每行右边界是否丢失
 
 
 // =====================================================
-// 工具函数
+// 限幅函数
 // =====================================================
 static int limit_int_local(int value, int min_value, int max_value)
 {
