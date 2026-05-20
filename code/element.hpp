@@ -1,6 +1,8 @@
 #ifndef ELEMENT_HPP
 #define ELEMENT_HPP
 
+#include "zf_common_headfile.hpp"
+
 typedef enum
 {
     ELEMENT_NORMAL = 0,
@@ -13,6 +15,11 @@ typedef enum
 } ElementType;
 
 void element_process(void);
+
 ElementType element_get_type(void);
+
+int element_is_straight(void);
+int element_is_cross(void);
+int element_is_obstacle(void);
 
 #endif

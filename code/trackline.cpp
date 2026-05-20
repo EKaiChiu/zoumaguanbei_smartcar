@@ -1,5 +1,6 @@
 #include "trackline.hpp"
 #include "image.hpp"
+#include "element.hpp"
 
 // 左右轮目标速度
 static int wheel_target_right = 0;
@@ -239,6 +240,11 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
 
     int run_speed = base_speed;
 
+    if(element_is_straight())
+    {
+        run_speed = base_speed*120/100;
+    }
+    else{
     if(abs_err > 35)
     {
         run_speed = base_speed * 55 / 100;
@@ -255,7 +261,7 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
     {
         run_speed = base_speed * 90 / 100;
     }
-
+    }
     run_speed = limit_int(run_speed, 80, 300);
 
     /*

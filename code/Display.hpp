@@ -1,17 +1,25 @@
-#ifndef DISPLAY_HPP
-#define DISPLAY_HPP
+#ifndef ELEMENT_HPP
+#define ELEMENT_HPP
 
 #include "zf_common_headfile.hpp"
-#include "../user/interaction.hpp"
-#include "camera.hpp"
-#include "pid.hpp"
 
-void display_image(ImageType type);
+typedef enum
+{
+    ELEMENT_NORMAL = 0,
+    ELEMENT_STRAIGHT,
+    ELEMENT_CROSS,
+    ELEMENT_RING_LEFT,
+    ELEMENT_RING_RIGHT,
+    ELEMENT_OBSTACLE,
+    ELEMENT_ZEBRA
+} ElementType;
 
-// 显示 PID 参数
-void display_pid_data(void);
+void element_process(void);
 
-// 显示灰度/二值图 + PID 参数
-void display_gray_with_pid(uint8 *image);
+ElementType element_get_type(void);
 
-#endif // DISPLAY_HPP
+int element_is_straight(void);
+int element_is_cross(void);
+int element_is_obstacle(void);
+
+#endif

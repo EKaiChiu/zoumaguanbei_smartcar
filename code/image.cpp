@@ -1,5 +1,5 @@
 #include "image.hpp"
-
+#include "element.hpp"
 
 // =====================================================
 // 全局数组定义
@@ -12,6 +12,12 @@ uint8 center_line[image_h];
 
 int Road_Wide[image_h];
 
+int Search_Stop_Line = 0;
+
+int White_Column[image_w] = {0};
+
+int Longest_White_Column_Left[2] = {0};
+int Longest_White_Column_Right[2] = {0};
 
 int Left_Lost_Time = 0;
 int Right_Lost_Time = 0;
@@ -652,7 +658,11 @@ if (get_start_point(image_h - 2))//找到起点了，再执行八领域，没找
 	// 从爬取的边界线内提取边线 ， 这个才是最终有用的边线
 	get_left(data_stastics_l);
 	get_right(data_stastics_r);
-    get_center_line(hightest);
+    get_center_line(hightest);//获取中线
+
+    element_process();//元素识别
+
+    get_center_line(hightest);//重新生成中线
 	//处理函数放这里，不要放到if外面去了，不要放到if外面去了，不要放到if外面去了，重要的事说三遍
 
 }
