@@ -15,6 +15,7 @@ typedef enum
 } ElementType;
 
 void element_process(void);
+void display_gray_with_pid(uint8 *image);
 
 ElementType element_get_type(void);
 
