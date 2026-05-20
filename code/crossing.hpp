@@ -1,31 +1,24 @@
-#ifndef _CROSSING_HPP
-#define _CROSSING_HPP
+#ifndef CROSSING_HPP
+#define CROSSING_HPP
 
 #include "image.hpp"
 
-float Slope_Calculate(uint8 begin, uint8 end, uint8 *border);
+void Cross_Detect(void);
 
-void calculate_s_i(
-    uint8 start,
-    uint8 end,
-    uint8 *border,
-    float *slope_rate,
-    float *intercept
-);
+void Find_Up_Point(int start, int end);
+void Find_Down_Point(int start, int end);
 
-void cross_fill(
-    uint8 (*image)[image_w],
-    uint8 *l_border,
-    uint8 *r_border,
-    uint16 total_num_l,
-    uint16 total_num_r,
-    uint16 *dir_l,
-    uint16 *dir_r,
-    uint16 (*points_l)[2],
-    uint16 (*points_r)[2]
-);
-int cross_fill_by_ABCD(
-    uint8 *l_border,
-    uint8 *r_border
-);
+void Left_Add_Line(int x1, int y1, int x2, int y2);
+void Right_Add_Line(int x1, int y1, int x2, int y2);
+
+void Lengthen_Left_Boundry(int start, int end);
+void Lengthen_Right_Boundry(int start, int end);
+
+extern volatile int Cross_Flaga;
+
+extern volatile int Left_Down_Find;
+extern volatile int Left_Up_Find;
+extern volatile int Right_Down_Find;
+extern volatile int Right_Up_Find;
+
 #endif

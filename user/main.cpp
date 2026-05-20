@@ -240,10 +240,6 @@ int main(int, char **)
     pid_speed_start(20);
 
 
-    // ====================== 斑马线停车状态 ======================
-    int zebra_stop_flag = 0;
-    int zebra_found_count = 0;
-
     // ====================== 9. 主循环 ======================
     while(!exit_requested)
     {
@@ -280,34 +276,7 @@ int main(int, char **)
         // =====================================================
         image_process_from_bin_ptr(gray_image);
 
-        // =====================================================
-        // 3. 斑马线检测
-        // 检测到斑马线后进入停车状态
-        // 连续多帧检测到，避免误识别导致急停
-        // =====================================================
-        zebra_stripes_detect((uint8 (*)[image_w])gray_image, l_border, r_border);
-
-        if(zebra_stripes_is_found())
-        {
-            zebra_found_count++;
-        }
-        else
-        {
-            zebra_found_count = 0;
-        }
-
-        if(zebra_found_count >= 3)
-        {
-            zebra_stop_flag = 1;
-        }
-
-        if(zebra_stop_flag)
-        {
-            pid_speed_set_target(0, 0);
-
-            drv8701e_pwm_1.set_duty(0);
-            drv8701e_pwm_2.set_duty(0);
-        }
+       
         // =====================================================
         // 3. 屏幕显示
         // 降低显示频率，避免影响控制周期
@@ -371,28 +340,6 @@ int main(int, char **)
                 trackline_wheel_target_right(),
                 trackline_wheel_target_left()
             );
-
-        // =====================================================
-        // 8. 帧率统计
-        // =====================================================
-        frame_count++;
-
-        auto current_time = std::chrono::steady_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = current_time - last_print_time;
-
-        if(elapsed.count() >= PRINT_INTERVAL)
-        {
-            double fps = frame_count / (elapsed.count() / 1000.0);
-
-            std::cout << "实时帧率：" << fps
-                      << " FPS | 累计帧数：" << frame_count
-                      << std::endl;
-
-            frame_count = 0;
-            last_print_time = current_time;
-        }
-    }
-
 
     // ====================== 10. 退出保护 ======================
     stop_all();
