@@ -1,5 +1,5 @@
-#ifndef CAMERA_HPP
-#define CAMERA_HPP
+#ifndef CAMERA_INT_HPP
+#define CAMERA_INT_HPP
 
 #include "zf_common_headfile.hpp"
 #include "../user/interaction.hpp"
@@ -12,4 +12,4 @@ void otsu_threshold(uint8 *gray_image);
 // 获取当前二值化阈值，方便显示调试
 uint8 camera_get_threshold(void);
 
-#endif // CAMERA_HPP
+#endif // CAMERA_INT_HPP

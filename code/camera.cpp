@@ -26,25 +26,17 @@ static uint8 otsuThreshold(uint8 *image, uint16 col, uint16 row)
     uint16 image_width  = col;
     uint16 image_height = row;
 
-    int hist[GRAY_SCALE] = {0};
+    uint32 hist[GRAY_SCALE] = {0};
 
-    uint32 amount = 0;
-    uint32 pixel_back = 0;
-    uint32 pixel_integral_back = 0;
-    uint32 pixel_integral = 0;
+    uint32 total_pixels = 0;
+    uint32 weight_back = 0;
+    uint32 weight_fore = 0;
 
-    int32 pixel_integral_fore = 0;
-    int32 pixel_fore = 0;
-
-    double omega_back = 0;
-    double omega_fore = 0;
-    double micro_back = 0;
-    double micro_fore = 0;
-    double sigma_b = -1;
-    double sigma = 0;
+    uint64 sum_total = 0;
+    uint64 sum_back = 0;
 
     uint16 min_value = 0;
-    uint16 max_value = 0;
+    uint16 max_value = 255;
 
     uint8 threshold = 0;
 
@@ -55,7 +47,8 @@ static uint8 otsuThreshold(uint8 *image, uint16 col, uint16 row)
     {
         for(uint16 x = 0; x < image_width; x++)
         {
-            hist[image[y * image_width + x]]++;
+            uint8 gray = image[y * image_width + x];
+            hist[gray]++;
         }
     }
 
@@ -74,7 +67,7 @@ static uint8 otsuThreshold(uint8 *image, uint16 col, uint16 row)
     }
 
     /*
-        图像只有一个灰度
+        图像只有一种灰度
     */
     if(max_value == min_value)
     {
@@ -90,55 +83,63 @@ static uint8 otsuThreshold(uint8 *image, uint16 col, uint16 row)
     }
 
     /*
-        4. 统计有效像素总数
+        4. 统计像素总数和灰度总和
     */
     for(uint16 i = min_value; i <= max_value; i++)
     {
-        amount += hist[i];
+        total_pixels += hist[i];
+        sum_total += (uint64)hist[i] * i;
     }
 
-    if(amount == 0)
+    if(total_pixels == 0)
     {
         return 0;
     }
 
     /*
-        5. 统计整幅图灰度积分
-    */
-    for(uint16 i = min_value; i <= max_value; i++)
-    {
-        pixel_integral += hist[i] * i;
-    }
+        5. 遍历阈值，寻找最大类间方差
 
-    /*
-        6. 遍历阈值，寻找最大类间方差
+        使用整数形式：
+        score = (total * sum_back - weight_back * sum_total)^2
+                / (weight_back * weight_fore)
+
+        为了避免浮点和除法，用交叉相乘比较：
+        num / den > best_num / best_den
+        即：
+        num * best_den > best_num * den
     */
+    __int128 best_num = -1;
+    __int128 best_den = 1;
+
+    sum_back = 0;
+    weight_back = 0;
+
     for(uint16 i = min_value; i < max_value; i++)
     {
-        pixel_back += hist[i];
-        pixel_fore = amount - pixel_back;
+        weight_back += hist[i];
+        sum_back += (uint64)hist[i] * i;
 
-        if(pixel_back == 0 || pixel_fore == 0)
+        weight_fore = total_pixels - weight_back;
+
+        if(weight_back == 0 || weight_fore == 0)
         {
             continue;
         }
 
-        omega_back = (double)pixel_back / amount;
-        omega_fore = (double)pixel_fore / amount;
+        /*
+            diff = total_pixels * sum_back - weight_back * sum_total
+        */
+        __int128 diff =
+            (__int128)total_pixels * sum_back
+          - (__int128)weight_back * sum_total;
 
-        pixel_integral_back += hist[i] * i;
-        pixel_integral_fore = pixel_integral - pixel_integral_back;
+        __int128 num = diff * diff;
+        __int128 den = (__int128)weight_back * weight_fore;
 
-        micro_back = (double)pixel_integral_back / pixel_back;
-        micro_fore = (double)pixel_integral_fore / pixel_fore;
-
-        sigma = omega_back * omega_fore *
-                (micro_back - micro_fore) *
-                (micro_back - micro_fore);
-
-        if(sigma > sigma_b)
+        if(best_num < 0 || num * best_den > best_num * den)
         {
-            sigma_b = sigma;
+            best_num = num;
+            best_den = den;
             threshold = (uint8)i;
         }
     }

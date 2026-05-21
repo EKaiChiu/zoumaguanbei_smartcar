@@ -166,8 +166,8 @@ static int get_standard_road_width(int y)
 {
     y = limit_int(y, 0, image_h - 1);
 
-    int top_width = image_w / 3;
-    int bottom_width = image_w * 3 / 4;
+    int top_width = 55;
+    int bottom_width = 139;
 
     int width = top_width + (bottom_width - top_width) * y / (image_h - 1);
 
@@ -569,12 +569,12 @@ void get_center_line(uint8 hightest)
         int left_valid = 1;
         int right_valid = 1;
 
-        if(left <= border_min + 1)
+        if(left <= border_min + 5)
         {
             left_valid = 0;
         }
 
-        if(right >= border_max - 1)
+        if(right >= border_max - 5)
         {
             right_valid = 0;
         }
@@ -603,31 +603,56 @@ void get_center_line(uint8 hightest)
             Both_Lost_Time++;
         }
 
-        int half_width = get_standard_road_width(y) / 2;
+        
 
-        if(left_valid && right_valid)
-        {
-            center_line[y] = (left + right) >> 1;
-            Road_Wide[y] = right - left;
-        }
-        else if(left_valid && !right_valid)
-        {
-            center_line[y] = left + half_width;
-            Road_Wide[y] = get_standard_road_width(y);
-        }
-        else if(!left_valid && right_valid)
-        {
-            center_line[y] = right - half_width;
-            Road_Wide[y] = get_standard_road_width(y);
-        }
-        else
-        {
-            center_line[y] = last_center;
-            Road_Wide[y] = get_standard_road_width(y);
-        }
+        int standard_width = get_standard_road_width(y);
+int half_width = standard_width / 2;
 
-        center_line[y] = limit_int(center_line[y], border_min, border_max);
-        last_center = center_line[y];
+/*
+    弯道 / 疑似环岛入口偏置：
+    近处少偏，防止车身当前姿态过激；
+    远处多偏，让车头提前朝弯道内侧，也就是圆心方向靠。
+*/
+int curve_offset = standard_width / 12;
+
+if(y < image_h * 2 / 3)
+{
+    curve_offset = standard_width / 8;
+}
+
+if(left_valid && right_valid)
+{
+    center_line[y] = (left + right) >> 1;
+    Road_Wide[y] = right - left;
+}
+else if(left_valid && !right_valid)
+{
+    /*
+        右边线丢失：
+        通常对应右弯或右侧圆弧，中心线向右多推一点。
+    */
+    center_line[y] = left + half_width + curve_offset;
+    Road_Wide[y] = standard_width;
+}
+else if(!left_valid && right_valid)
+{
+    /*
+        左边线丢失：
+        通常对应左弯或左侧圆弧，中心线向左多推一点。
+    */
+    center_line[y] = right - half_width - curve_offset;
+    Road_Wide[y] = standard_width;
+}
+else
+{
+    center_line[y] = last_center;
+    Road_Wide[y] = standard_width;
+}
+
+center_line[y] = limit_int(center_line[y], border_min, border_max);
+last_center = center_line[y];
+
+        
     }
 
     Search_Stop_Line = image_h - hightest;
