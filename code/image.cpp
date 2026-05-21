@@ -542,7 +542,7 @@ void image_filter(uint8(*bin_image)[image_w])//形态学滤波，简单来说就
 函数返回：无
 修改时间：2026年5月20日
 example：  get_center_line(hightest);
- */
+ */ 
 void get_center_line(uint8 hightest)
 {
     int last_center = image_w / 2;
