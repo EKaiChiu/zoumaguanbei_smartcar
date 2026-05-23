@@ -11,7 +11,7 @@ static float Err = 0.0f;
 static float turn_output = 0.0f;
 
 
-static float camera_P = 0.41f;
+static float camera_P = 0.80f;
 static float camera_D = 0.01f;
 
 static float error_last = 0.0f;
@@ -157,16 +157,25 @@ static float Err_Sum(int aim_y)
     int near_center = center_line[near_y];
     int far_center = center_line[far_y];
 
-    if(near_center <= border_min || near_center >= border_max)
+        // ===== 近处中线丢线保护 =====
+    if(near_center <= border_min)
     {
-        near_center = image_mid;
+        near_center = border_min; // 边沿保持：强制卡在最左侧边界，让近处误差拉满
+    }
+    else if(near_center >= border_max)
+    {
+        near_center = border_max; // 边沿保持：强制卡在最右侧边界，让近处误差拉满
     }
 
-    if(far_center <= border_min || far_center >= border_max)
+    // ===== 远处中线丢线保护 =====
+    if(far_center <= border_min)
     {
-        far_center = near_center;
+        far_center = border_min;  // 边沿保持：远处误差拉满
     }
-
+    else if(far_center >= border_max)
+    {
+        far_center = border_max;  // 边沿保持：远处误差拉满
+    }
     float near_error = (float)(image_mid - near_center);
     float far_error = (float)(image_mid - far_center);
 
@@ -213,36 +222,32 @@ static float PD_Camera(float expect_val, float err)
 // =====================================================
 void trackline_refresh_wheel_targets(int base_speed, int aim_y)
 {
-    /*
-        1. 计算多行加权误差
-        Err > 0：中线在图像左侧，需要左转
-        Err < 0：中线在图像右侧，需要右转
-    */
-    Err = Err_Sum(aim_y);
+    int dynamic_aim_y = aim_y;
+    int last_abs_err = abs_int((int)Err); 
+    if(last_abs_err > 20)
+    {
+        dynamic_aim_y = limit_int(aim_y + 20, 0, image_h - 15);
+    }
 
-    /*
-        2. 小误差死区，防止直道左右抖
-    */
+    Err = Err_Sum(dynamic_aim_y);
+
     if(Err > -2.0f && Err < 2.0f)
     {
         Err = 0.0f;
     }
 
-    /*
-        3. 摄像头 PD 输出
-    */
     turn_output = PD_Camera(0.0f, Err);
 
-    /*
-        4. 误差越大，基础速度越低
-    */
     int abs_err = abs_int((int)Err);
-
     int run_speed = base_speed;
 
-    if(abs_err > 35)
+    if(abs_err > 45)
     {
-        run_speed = base_speed * 55 / 100;
+        run_speed = base_speed * 35 / 100;
+    }
+    else if(abs_err > 35)
+    {
+        run_speed = base_speed * 50 / 100;
     }
     else if(abs_err > 25)
     {
@@ -257,27 +262,15 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
         run_speed = base_speed * 90 / 100;
     }
     
-    run_speed = limit_int(run_speed, 80, 300);
+    run_speed = limit_int(run_speed, 50, 300);
 
-    /*
-        5. 差速量
-    */
     float increase = -turn_output * diff_gain * TRACK_DIR;
 
-    /*
-        6. 差速限幅
-    */
     int diff = limit_int((int)increase, -600, 600);
 
-    /*
-        7. 生成左右轮目标速度
-    */
     wheel_target_left  = run_speed - diff;
     wheel_target_right = run_speed + diff;
 
-    /*
-        8. 限幅
-    */
     wheel_target_left  = limit_int(wheel_target_left,  0, 800);
     wheel_target_right = limit_int(wheel_target_right, 0, 800);
 }
