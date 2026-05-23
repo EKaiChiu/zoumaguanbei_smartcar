@@ -208,8 +208,7 @@ int main(int, char **)
 #endif
 
 
-    // ====================== 4. 初始化屏幕 ======================
-    ips200.init(FB_PATH);
+    //ips200.init(FB_PATH);
 
 
     // ====================== 5. 初始化电机信息 ======================
@@ -219,10 +218,10 @@ int main(int, char **)
 
     // ====================== 6. 初始化 PID ======================
     // 左右轮速度 PID，参数先保守，后面实车调
-    pid_speed_init(4.0f, 0.0f, 0.0f, 0, 0);
+    pid_speed_init(10.0f, 0.01f, 0.0f, 0, 0);
 
     // 中线差速 PID，参数需要后面实车调
-    trackline_init(4.80f, 0.0f, 0.5f);
+    trackline_init(2.0f, 0.0f, 0.5f);
     
 
 
@@ -276,7 +275,7 @@ int main(int, char **)
         //   center_line[i]
         // =====================================================
         image_process_from_bin_ptr(gray_image);
-
+       
        
         // =====================================================
         // 3. 屏幕显示
@@ -335,7 +334,7 @@ int main(int, char **)
         // 7. 巡线
         // =====================================================
         
-        trackline_refresh_wheel_targets(100, UVC_HEIGHT - 20);
+        trackline_refresh_wheel_targets(00, UVC_HEIGHT - 20);
 
             pid_speed_set_target(
                 trackline_wheel_target_right(),
