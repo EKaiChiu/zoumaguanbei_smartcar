@@ -36,7 +36,7 @@
 
 
 // ====================== TCP / UDP 配置 ======================
-#define SERVER_IP   "192.168.1.103"     // 电脑端逐飞助手所在 IP
+#define SERVER_IP   "192.168.1.104"     // 电脑端逐飞助手所在 IP
 #define PORT        8086                // 与逐飞助手端口一致
 
 
@@ -335,7 +335,7 @@ int main(int, char **)
         // 7. 巡线
         // =====================================================
         
-        trackline_refresh_wheel_targets(200, UVC_HEIGHT - 20);
+        trackline_refresh_wheel_targets(100, UVC_HEIGHT - 20);
 
             pid_speed_set_target(
                 trackline_wheel_target_right(),
