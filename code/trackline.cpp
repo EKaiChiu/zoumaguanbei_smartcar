@@ -1,6 +1,7 @@
 #include "trackline.hpp"
 #include "image.hpp"
 #include "element.hpp"
+#include "config.hpp"
 
 // 左右轮目标速度
  int wheel_target_right = 0;
@@ -22,13 +23,6 @@ static float error_last = 0.0f;
 // 对应原代码 Pre1_Error[4]
 // =====================================================
 static float Pre1_Error[4] = {0, 0, 0, 0};
-
-
-// =====================================================
-// 差速放大系数
-// 转向力度不够就加大，比如 1.5 / 2.0 / 2.5
-// =====================================================
-static float diff_gain = 5.0f;
 
 
 // 方向修正
@@ -311,15 +305,15 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
     
     run_speed = limit_int(run_speed, 50, 300);
 
-    float increase = -turn_output * diff_gain * TRACK_DIR;
+    float increase = -turn_output * car_config.diff_gain * TRACK_DIR;
 
-    int diff = limit_int((int)increase, -800, 800);
+    int diff = limit_int((int)increase, -car_config.diff_speed_lim, car_config.diff_speed_lim);
 
     wheel_target_left  = run_speed - diff;
     wheel_target_right = run_speed + diff;
 
-    wheel_target_left  = limit_int(wheel_target_left,  -800, 800);
-    wheel_target_right = limit_int(wheel_target_right, -800, 800);
+    wheel_target_left  = limit_int(wheel_target_left,  -car_config.diff_speed_lim-200, car_config.diff_speed_lim+200);
+    wheel_target_right = limit_int(wheel_target_right, -car_config.diff_speed_lim-200, car_config.diff_speed_lim+200);
 }
 
 

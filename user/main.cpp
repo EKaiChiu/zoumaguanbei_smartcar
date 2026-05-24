@@ -20,6 +20,8 @@
 #include "target.hpp"
 #include "trackline.hpp"
 #include "zebra.hpp"
+#include "config.hpp"
+#include "menu.hpp"
 
 #include "zf_common_headfile.hpp"
 #include "interaction.hpp"
@@ -70,7 +72,8 @@ uint8 x2_boundary[UVC_HEIGHT];
 uint8 x3_boundary[UVC_HEIGHT];
 
 static volatile sig_atomic_t exit_requested = 0;
-
+//发车标志
+static int car_started = 0;
 
 // ====================== TCP 收发包装函数 ======================
 // 逐飞助手接口需要普通函数指针，所以这里封装 tcp_client_dev 的成员函数
@@ -124,6 +127,8 @@ void stop_all(void)
 // ====================== main ======================
 int main(int, char **)
 {
+    int car_started = 0;
+
     signal(SIGINT, sigint_handler);
 
     int frame_count = 0;
@@ -208,7 +213,7 @@ int main(int, char **)
 #endif
 
 
-    //ips200.init(FB_PATH);
+    ips200.init(FB_PATH);
 
 
     // ====================== 5. 初始化电机信息 ======================
@@ -216,12 +221,11 @@ int main(int, char **)
     drv8701e_pwm_2.get_dev_info(&drv8701e_pwm_2_info);
 
 
-    // ====================== 6. 初始化 PID ======================
-    // 左右轮速度 PID，参数先保守，后面实车调
-    pid_speed_init(10.0f, 0.01f, 0.0f, 0, 0);
+    // 左右轮速度 PID
+    pid_speed_init(car_config.speed_kp, car_config.speed_ki, car_config.speed_kd, 0, 0);
 
-    // 中线差速 PID，参数需要后面实车调
-    trackline_init(2.0f, 0.0f, 0.5f);
+    // 中线差速 PID
+    trackline_init(car_config.track_kp, car_config.track_ki, car_config.track_kd);
     
 
 
@@ -240,7 +244,7 @@ int main(int, char **)
     pid_speed_start(20);
 
 
-    // ====================== 9. 主循环 ======================
+    // 主循环
     while(!exit_requested)
     {
         // 等待摄像头刷新
@@ -259,28 +263,14 @@ int main(int, char **)
         }
 
 
-        // =====================================================
-        // 1. 二值化
-        // 注意：otsu_threshold() 会原地修改 gray_image
-        // 输出结果必须是 0 / 255
-        // =====================================================
         otsu_threshold(gray_image);
 
 
-        // =====================================================
-        // 2. 八邻域找左右边界和中线
-        // 输出:
-        //   l_border[i]
-        //   r_border[i]
-        //   center_line[i]
-        // =====================================================
+        
         image_process_from_bin_ptr(gray_image);
        
        
-        // =====================================================
-        // 3. 屏幕显示
-        // 降低显示频率，避免影响控制周期
-        // =====================================================
+        
         static int display_count = 0;
         display_count++;
 
@@ -330,11 +320,18 @@ int main(int, char **)
 #endif
 
 
-        // =====================================================
-        // 7. 巡线
-        // =====================================================
-        
-        trackline_refresh_wheel_targets(400, UVC_HEIGHT - 45);
+        Key_Process();
+
+        int key = Key_GetValueOnce();
+
+    if(key == KEY_4)
+    {
+        car_started = 1;
+
+        std::cout << "KEY4 pressed, car start." << std::endl;
+    }        
+
+        trackline_refresh_wheel_targets(car_config.run_speed, UVC_HEIGHT - 45);
             pid_speed_set_target(
                 trackline_wheel_target_right(),
                 trackline_wheel_target_left()
