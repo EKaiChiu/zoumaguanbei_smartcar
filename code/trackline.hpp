@@ -12,5 +12,8 @@ int trackline_wheel_target_left(void);
 
 float trackline_get_error(void);
 float trackline_get_turn_output(void);
+extern  int wheel_target_left;
+extern  int wheel_target_right;
+extern int diff;
 
 #endif

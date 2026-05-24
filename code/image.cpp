@@ -1,9 +1,15 @@
 #include "image.hpp"
 #include "element.hpp"
 
-// =====================================================
-// 全局数组定义
-// =====================================================
+/*
+函数名称：全局图像数据
+功能说明：保存二值图、左右边线、中线、赛道宽度以及丢线统计信息
+参数说明：无
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+example：
+ */
 uint8 bin_image[image_h][image_w];
 
 uint8 l_border[image_h];
@@ -23,12 +29,21 @@ int Left_Lost_Time = 0;
 int Right_Lost_Time = 0;
 int Both_Lost_Time = 0;
 
-int Boundry_Start_Left = 0;//左边界首次有效的行号
-int Boundry_Start_Right = 0;//右边界首次有效的行号
+int Boundry_Start_Left = 0;
+int Boundry_Start_Right = 0;
 
-int Left_Lost_Flag[image_h] = {0};  //每行左边界是否丢失
-int Right_Lost_Flag[image_h] = {0}; //每行右边界是否丢失
+int Left_Lost_Flag[image_h] = {0};
+int Right_Lost_Flag[image_h] = {0};
 
+#define LINE_VALID       0
+#define LINE_LOST_WHITE  1
+#define LINE_BIG_JUMP    2
+#define LINE_INVALID_TOP 3
+
+static uint8 Left_Line_State[image_h] = {0};
+static uint8 Right_Line_State[image_h] = {0};
+
+static int Valid_Top_Y = 0;
 
 /*
 函数名称：static int limit_int(int value, int min_value, int max_value)
@@ -61,20 +76,32 @@ static int limit_int(int value, int min_value, int max_value)
 函数名称：int my_abs(int value)
 功能说明：求绝对值
 参数说明：
+    value：需要求绝对值的整数
 函数返回：绝对值
 修改时间：2026年5月20日
 备    注：
-example：  my_abs( x)；
+example：  my_abs(x);
  */
 int my_abs(int value)
 {
-if(value>=0) return value;
-else return -value;
+    if(value >= 0)
+    {
+        return value;
+    }
+
+    return -value;
 }
 
-// =====================================================
-// 拷贝一维二值图到二维 bin_image
-// =====================================================
+/*
+函数名称：static void copy_bin_image(uint8 *bin_src)
+功能说明：将一维二值图拷贝到二维 bin_image 数组
+参数说明：
+    bin_src：一维二值图指针，图像格式为 0 / 255
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+example：  copy_bin_image(gray_image);
+ */
 static void copy_bin_image(uint8 *bin_src)
 {
     if(bin_src == NULL)
@@ -91,10 +118,15 @@ static void copy_bin_image(uint8 *bin_src)
     }
 }
 
-
-// =====================================================
-// 给图像加黑框，防止扫描越界
-// =====================================================
+/*
+函数名称：static void image_draw_black_rect(void)
+功能说明：给二值图四周加黑框，防止边线搜索时访问越界
+参数说明：无
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+example：  image_draw_black_rect();
+ */
 static void image_draw_black_rect(void)
 {
     for(int y = 0; y < image_h; y++)
@@ -113,13 +145,19 @@ static void image_draw_black_rect(void)
     }
 }
 
-
-// =====================================================
-// 初始化所有边界数据
-// =====================================================
+/*
+函数名称：static void clear_line_data(void)
+功能说明：初始化所有边线、中线、宽度和丢线统计数据
+参数说明：无
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+example：  clear_line_data();
+ */
 static void clear_line_data(void)
 {
     Search_Stop_Line = 0;
+    Valid_Top_Y = image_h / 2;
 
     Left_Lost_Time = 0;
     Right_Lost_Time = 0;
@@ -144,6 +182,9 @@ static void clear_line_data(void)
 
         Left_Lost_Flag[y] = 1;
         Right_Lost_Flag[y] = 1;
+
+        Left_Line_State[y] = LINE_LOST_WHITE;
+        Right_Line_State[y] = LINE_LOST_WHITE;
     }
 
     for(int x = 0; x < image_w; x++)
@@ -152,14 +193,16 @@ static void clear_line_data(void)
     }
 }
 
-
 /*
 函数名称：static int get_standard_road_width(int y)
 功能说明：根据图像行号估算当前行的赛道宽度，供单边丢线时推算中线使用
 参数说明：
     y：图像行号，数值越大表示越靠近图像底部
 函数返回：当前行估算得到的赛道宽度，单位为像素
-修改时间：2026年5月20日
+修改时间：2026年5月23日
+备    注：
+    bottom_width 根据长直道底部实测得到。
+    当前实测底部左边线 x=7，右边线 x=146，因此底部赛道宽度为 139。
 example：  get_standard_road_width(y);
  */
 static int get_standard_road_width(int y)
@@ -175,390 +218,538 @@ static int get_standard_road_width(int y)
 }
 
 /*
-函数名称：void get_start_point(uint8 start_row)
-功能说明：寻找两个边界的边界点作为八邻域循环的起始点
-参数说明：输入任意行数
+函数名称：void image_filter(uint8(*bin_image)[image_w])
+功能说明：对二值图进行简单形态学滤波，填补孤立黑点并去除孤立白点
+参数说明：
+    bin_image：二维二值图数组，像素值为 0 / 255
 函数返回：无
-修改时间：2026年5月20日
+修改时间：2026年5月23日
 备    注：
-example：  get_start_point(image_h-2)
-*/
-uint8 start_point_l[2] = { 0 };//左边起点的x，y值
-uint8 start_point_r[2] = { 0 };//右边起点的x，y值
-uint8 get_start_point(uint8 start_row)
+example：  image_filter(bin_image);
+ */
+#define threshold_max (255 * 5)
+#define threshold_min (255 * 2)
+
+void image_filter(uint8(*bin_image)[image_w])
 {
-	uint8 i = 0,l_found = 0,r_found = 0;
-	//清零
-	start_point_l[0] = 0;//x
-	start_point_l[1] = 0;//y
+    uint16 i;
+    uint16 j;
+    uint32 num = 0;
 
-	start_point_r[0] = 0;//x
-	start_point_r[1] = 0;//y
+    for(i = 1; i < image_h - 1; i++)
+    {
+        for(j = 1; j < image_w - 1; j++)
+        {
+            num =
+                bin_image[i - 1][j - 1] + bin_image[i - 1][j] + bin_image[i - 1][j + 1]
+              + bin_image[i][j - 1]                             + bin_image[i][j + 1]
+              + bin_image[i + 1][j - 1] + bin_image[i + 1][j] + bin_image[i + 1][j + 1];
 
-		//从中间往左边，先找起点
-	for (i = image_w / 2; i > border_min; i--)
-	{
-		start_point_l[0] = i;//x
-		start_point_l[1] = start_row;//y
-		if (bin_image[start_row][i] == 255 && bin_image[start_row][i - 1] == 0)
-		{
-			//printf("找到左边起点image[%d][%d]\n", start_row,i);
-			l_found = 1;
-			break;
-		}
-	}
+            if(num >= threshold_max && bin_image[i][j] == black_pixel)
+            {
+                bin_image[i][j] = white_pixel;
+            }
 
-	for (i = image_w / 2; i < border_max; i++)
-	{
-		start_point_r[0] = i;//x
-		start_point_r[1] = start_row;//y
-		if (bin_image[start_row][i] == 255 && bin_image[start_row][i + 1] == 0)
-		{
-			//printf("找到右边起点image[%d][%d]\n",start_row, i);
-			r_found = 1;
-			break;
-		}
-	}
-
-	if(l_found&&r_found)return 1;
-	else {
-		//printf("未找到起点\n");
-		return 0;
-	} 
+            if(num <= threshold_min && bin_image[i][j] == white_pixel)
+            {
+                bin_image[i][j] = black_pixel;
+            }
+        }
+    }
 }
 
 /*
-函数名称：void search_l_r(uint16 break_flag, uint8(*image)[image_w],uint16 *l_stastic, uint16 *r_stastic,
-                        uint8 l_start_x, uint8 l_start_y, uint8 r_start_x, uint8 r_start_y,uint8*hightest)
-
-功能说明：八邻域正式开始找右边点的函数，输入参数有点多，调用的时候不要漏了，这个是左右线一次性找完。
+函数名称：static uint8 is_left_edge(int y, int x)
+功能说明：判断指定坐标是否为左边界点
 参数说明：
-break_flag_r			：最多需要循环的次数
-(*image)[image_w]		：需要进行找点的图像数组，必须是二值图,填入数组名称即可
-                    特别注意，不要拿宏定义名字作为输入参数，否则数据可能无法传递过来
-*l_stastic				：统计左边数据，用来输入初始数组成员的序号和取出循环次数
-*r_stastic				：统计右边数据，用来输入初始数组成员的序号和取出循环次数
-l_start_x				：左边起点横坐标
-l_start_y				：左边起点纵坐标
-r_start_x				：右边起点横坐标
-r_start_y				：右边起点纵坐标
-hightest				：循环结束所得到的最高高度
-函数返回：无
-修改时间：2026年5月20日
+    y：图像行号
+    x：图像列号
+函数返回：
+    1：是左边界
+    0：不是左边界
+修改时间：2026年5月23日
 备    注：
-example：
-    search_l_r((uint16)USE_num,image,&data_stastics_l, &data_stastics_r,start_point_l[0],
-                start_point_l[1], start_point_r[0], start_point_r[1],&hightest);
-*/
-
-#define USE_num	image_h*3	//定义找点的数组成员个数按理说300个点能放下，但是有些特殊情况确实难顶，多定义了一点
-
-//存放点的x，y坐标
-uint16 points_l[(uint16)USE_num][2] = { {  0 } };//左线
-uint16 points_r[(uint16)USE_num][2] = { {  0 } };//右线
-uint16 dir_r[(uint16)USE_num] = { 0 };//用来存储右边生长方向
-uint16 dir_l[(uint16)USE_num] = { 0 };//用来存储左边生长方向
-uint16 data_stastics_l = 0;//统计左边找到点的个数
-uint16 data_stastics_r = 0;//统计右边找到点的个数
-uint8 hightest = 0;//最高点
-void search_l_r(uint16 break_flag, uint8(*image)[image_w], uint16 *l_stastic, uint16 *r_stastic, uint8 l_start_x, uint8 l_start_y, uint8 r_start_x, uint8 r_start_y, uint8*hightest)
+    左边界特征：当前点为白，左侧点为黑。
+example：  is_left_edge(y, x);
+ */
+static uint8 is_left_edge(int y, int x)
 {
-
-    uint8 i = 0, j = 0;
-
-    //左边变量
-    uint8 search_filds_l[8][2] = { {  0 } };
-    uint8 index_l = 0;
-    uint8 temp_l[8][2] = { {  0 } };
-    uint8 center_point_l[2] = {  0 };
-    uint16 l_data_statics;//统计左边
-    //定义八个邻域
-    static int8 seeds_l[8][2] = { {0,  1},{-1,1},{-1,0},{-1,-1},{0,-1},{1,-1},{1,  0},{1, 1}, };
-    //{-1,-1},{0,-1},{+1,-1},
-    //{-1, 0},	     {+1, 0},
-    //{-1,+1},{0,+1},{+1,+1},
-    //这个是顺时针
-
-    //右边变量
-    uint8 search_filds_r[8][2] = { {  0 } };
-    uint8 center_point_r[2] = { 0 };//中心坐标点
-    uint8 index_r = 0;//索引下标
-    uint8 temp_r[8][2] = { {  0 } };
-    uint16 r_data_statics;//统计右边
-    //定义八个邻域
-    static int8 seeds_r[8][2] = { {0,  1},{1,1},{1,0}, {1,-1},{0,-1},{-1,-1}, {-1,  0},{-1, 1}, };
-    //{-1,-1},{0,-1},{+1,-1},
-    //{-1, 0},	     {+1, 0},
-    //{-1,+1},{0,+1},{+1,+1},
-    //这个是逆时针
-
-    l_data_statics = *l_stastic;//统计找到了多少个点，方便后续把点全部画出来
-    r_data_statics = *r_stastic;//统计找到了多少个点，方便后续把点全部画出来
-
-    //第一次更新坐标点  将找到的起点值传进来
-    center_point_l[0] = l_start_x;//x
-    center_point_l[1] = l_start_y;//y
-    center_point_r[0] = r_start_x;//x
-    center_point_r[1] = r_start_y;//y
-
-        //开启邻域循环
-    while (break_flag--)
+    if(y <= 0 || y >= image_h)
     {
-
-        //左边
-        for (i = 0; i < 8; i++)//传递8F坐标
-        {
-            search_filds_l[i][0] = center_point_l[0] + seeds_l[i][0];//x
-            search_filds_l[i][1] = center_point_l[1] + seeds_l[i][1];//y
-        }
-        //中心坐标点填充到已经找到的点内
-        points_l[l_data_statics][0] = center_point_l[0];//x
-        points_l[l_data_statics][1] = center_point_l[1];//y
-        l_data_statics++;//索引加一
-
-        //右边
-        for (i = 0; i < 8; i++)//传递8F坐标
-        {
-            search_filds_r[i][0] = center_point_r[0] + seeds_r[i][0];//x
-            search_filds_r[i][1] = center_point_r[1] + seeds_r[i][1];//y
-        }
-        //中心坐标点填充到已经找到的点内
-        points_r[r_data_statics][0] = center_point_r[0];//x
-        points_r[r_data_statics][1] = center_point_r[1];//y
-
-        index_l = 0;//先清零，后使用
-        for (i = 0; i < 8; i++)
-        {
-            temp_l[i][0] = 0;//先清零，后使用
-            temp_l[i][1] = 0;//先清零，后使用
-        }
-
-        //左边判断
-        for (i = 0; i < 8; i++)
-        {
-            if (image[search_filds_l[i][1]][search_filds_l[i][0]] == 0
-                && image[search_filds_l[(i + 1) & 7][1]][search_filds_l[(i + 1) & 7][0]] == 255)
-            {
-                temp_l[index_l][0] = search_filds_l[(i)][0];
-                temp_l[index_l][1] = search_filds_l[(i)][1];
-                index_l++;
-                dir_l[l_data_statics - 1] = (i);//记录生长方向
-            }
-
-            if (index_l)
-            {
-                //更新坐标点
-                center_point_l[0] = temp_l[0][0];//x
-                center_point_l[1] = temp_l[0][1];//y
-                for (j = 0; j < index_l; j++)
-                {
-                    if (center_point_l[1] > temp_l[j][1])
-                    {
-                        center_point_l[0] = temp_l[j][0];//x
-                        center_point_l[1] = temp_l[j][1];//y
-                    }
-                }
-            }
-
-        }
-        //特殊情况
-        if ((points_r[r_data_statics][0]== points_r[r_data_statics-1][0]&& points_r[r_data_statics][0] == points_r[r_data_statics - 2][0]
-            && points_r[r_data_statics][1] == points_r[r_data_statics - 1][1] && points_r[r_data_statics][1] == points_r[r_data_statics - 2][1])
-            ||(points_l[l_data_statics-1][0] == points_l[l_data_statics - 2][0] && points_l[l_data_statics-1][0] == points_l[l_data_statics - 3][0]
-                && points_l[l_data_statics-1][1] == points_l[l_data_statics - 2][1] && points_l[l_data_statics-1][1] == points_l[l_data_statics - 3][1]))
-        {
-            printf("三次进入同一个点，退出\n");
-            break;
-        }
-        if (my_abs(points_r[r_data_statics][0] - points_l[l_data_statics - 1][0]) < 2
-        && my_abs(points_r[r_data_statics][1] - points_l[l_data_statics - 1][1]) < 2)
-        {
-            printf("\n左右相遇退出\n");	
-            *hightest = (points_r[r_data_statics][1] + points_l[l_data_statics - 1][1]) >> 1;//取出最高点
-            printf("\n在y=%d处退出\n",*hightest);
-            break;
-        }
-        if ((points_r[r_data_statics][1] < points_l[l_data_statics - 1][1]))
-        {
-        	
-            continue;//如果左边比右边高了，左边等待右边
-        }
-        if (dir_l[l_data_statics - 1] == 7
-            && (points_r[r_data_statics][1] > points_l[l_data_statics - 1][1]))//左边比右边高且已经向下生长了
-        {
-            //printf("\n左边开始向下了，等待右边，等待中... \n");
-            center_point_l[0] = points_l[l_data_statics - 1][0];//x
-            center_point_l[1] = points_l[l_data_statics - 1][1];//y
-            l_data_statics--;
-        }
-        r_data_statics++;//索引加一
-
-        index_r = 0;//先清零，后使用
-        for (i = 0; i < 8; i++)
-        {
-            temp_r[i][0] = 0;//先清零，后使用
-            temp_r[i][1] = 0;//先清零，后使用
-        }
-
-        //右边判断
-        for (i = 0; i < 8; i++)
-        {
-            if (image[search_filds_r[i][1]][search_filds_r[i][0]] == 0
-                && image[search_filds_r[(i + 1) & 7][1]][search_filds_r[(i + 1) & 7][0]] == 255)
-            {
-                temp_r[index_r][0] = search_filds_r[(i)][0];
-                temp_r[index_r][1] = search_filds_r[(i)][1];
-                index_r++;//索引加一
-                dir_r[r_data_statics - 1] = (i);//记录生长方向
-                //printf("dir[%d]:%d\n", r_data_statics - 1, dir_r[r_data_statics - 1]);
-            }
-            if (index_r)
-            {
-
-                //更新坐标点
-                center_point_r[0] = temp_r[0][0];//x
-                center_point_r[1] = temp_r[0][1];//y
-                for (j = 0; j < index_r; j++)
-                {
-                    if (center_point_r[1] > temp_r[j][1])
-                    {
-                        center_point_r[0] = temp_r[j][0];//x
-                        center_point_r[1] = temp_r[j][1];//y
-                    }
-                }
-
-            }
-        }
-
-
+        return 0;
     }
 
+    if(x <= border_min || x >= border_max)
+    {
+        return 0;
+    }
 
-    //取出循环次数
-    *l_stastic = l_data_statics;
-    *r_stastic = r_data_statics;
+    if(bin_image[y][x] == white_pixel && bin_image[y][x - 1] == black_pixel)
+    {
+        return 1;
+    }
 
+    return 0;
 }
 
 /*
-函数名称:void get_right(uint16 total_R)
-        void get_left(uint16 total_R)
-功能说明：从八邻域边界里提取需要的边线
+函数名称：static uint8 is_right_edge(int y, int x)
+功能说明：判断指定坐标是否为右边界点
 参数说明：
-total_R  ：找到的点的总数
-函数返回：无
-修改时间：2026年5月20日
+    y：图像行号
+    x：图像列号
+函数返回：
+    1：是右边界
+    0：不是右边界
+修改时间：2026年5月23日
 备    注：
-example：get_right(data_stastics_r);
+    右边界特征：当前点为白，右侧点为黑。
+example：  is_right_edge(y, x);
  */
-void get_right(uint16 total_R)
+static uint8 is_right_edge(int y, int x)
 {
-	uint8 i = 0;
-	uint16 j = 0;
-	uint8 h = 0;
-	for (i = 0; i < image_h; i++)
-	{
-		r_border[i] = border_max;//右边线初始化放到最右边，左边线放到最左边，这样八邻域闭合区域外的中线就会在中间，不会干扰得到的数据
-	}
-	h = image_h - 2;
-	//右边
-	for (j = 0; j < total_R; j++)
-	{
-		if (points_r[j][1] == h)
-		{
-			r_border[h] = points_r[j][0] - 1;
-		}
-		else continue;//每行只取一个点，没到下一行就不记录
-		h--;
-		if (h == 0)break;//到最后一行退出
-	}
-}
-void get_left(uint16 total_L)
-{
-	uint8 i = 0;
-	uint16 j = 0;
-	uint8 h = 0;
-	for (i = 0; i < image_h; i++)
-	{
-		l_border[i] = border_min;//左边线初始化放到最左边，右边线放到最右边，这样八邻域闭合区域外的中线就会在中间，不会干扰得到的数据
-	}
-	h = image_h - 2;
-	//左边
-	for (j = 0; j < total_L; j++)
-	{
-		if (points_l[j][1] == h)
-		{
-			l_border[h] = points_l[j][0] + 1;
-		}
-		else continue;//每行只取一个点，没到下一行就不记录
-		h--;
-		if (h == 0)break;//到最后一行退出
-	}
+    if(y <= 0 || y >= image_h)
+    {
+        return 0;
+    }
+
+    if(x <= border_min || x >= border_max)
+    {
+        return 0;
+    }
+
+    if(bin_image[y][x] == white_pixel && bin_image[y][x + 1] == black_pixel)
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
-//定义膨胀和腐蚀的阈值区间
-#define threshold_max	255*5//此参数可根据自己的需求调节
-#define threshold_min	255*2//此参数可根据自己的需求调节
-void image_filter(uint8(*bin_image)[image_w])//形态学滤波，简单来说就是膨胀和腐蚀的思想
+/*
+函数名称：static uint8 find_longest_white_segment(int y, int *left, int *right)
+功能说明：在指定行寻找最长连续白色区域，用于车身偏斜时稳定寻找底部赛道区域
+参数说明：
+    y：需要搜索的图像行号
+    left：输出最长白色区域左端点
+    right：输出最长白色区域右端点
+函数返回：
+    1：找到可靠白色区域
+    0：未找到可靠白色区域
+修改时间：2026年5月23日
+备    注：
+    该函数用于替代单纯从图像中心左右找边界，提升车身偏斜时的恢复能力。
+example：  find_longest_white_segment(y, &left, &right);
+ */
+static uint8 find_longest_white_segment(int y, int *left, int *right)
 {
-	uint16 i, j;
-	uint32 num = 0;
+    int best_start = 0;
+    int best_end = 0;
+    int best_len = 0;
 
+    int current_start = -1;
+    int current_len = 0;
 
-	for (i = 1; i < image_h - 1; i++)
-	{
-		for (j = 1; j < (image_w - 1); j++)
-		{
-			//统计八个方向的像素值
-			num =
-				bin_image[i - 1][j - 1] + bin_image[i - 1][j] + bin_image[i - 1][j + 1]
-				+ bin_image[i][j - 1] + bin_image[i][j + 1]
-				+ bin_image[i + 1][j - 1] + bin_image[i + 1][j] + bin_image[i + 1][j + 1];
+    for(int x = border_min + 2; x <= border_max - 2; x++)
+    {
+        if(bin_image[y][x] == white_pixel)
+        {
+            if(current_start < 0)
+            {
+                current_start = x;
+                current_len = 1;
+            }
+            else
+            {
+                current_len++;
+            }
+        }
+        else
+        {
+            if(current_start >= 0)
+            {
+                if(current_len > best_len)
+                {
+                    best_len = current_len;
+                    best_start = current_start;
+                    best_end = x - 1;
+                }
 
+                current_start = -1;
+                current_len = 0;
+            }
+        }
+    }
 
-			if (num >= threshold_max && bin_image[i][j] == 0)
-			{
+    if(current_start >= 0)
+    {
+        if(current_len > best_len)
+        {
+            best_len = current_len;
+            best_start = current_start;
+            best_end = border_max - 2;
+        }
+    }
 
-				bin_image[i][j] = 255;//白  可以搞成宏定义，方便更改
+    if(best_len < image_w / 5)
+    {
+        return 0;
+    }
 
-			}
-			if (num <= threshold_min && bin_image[i][j] == 255)
-			{
+    *left = best_start;
+    *right = best_end;
 
-				bin_image[i][j] = 0;//黑
+    return 1;
+}
 
-			}
+/*
+函数名称：static uint8 find_bottom_border(int *bottom_y)
+功能说明：从图像底部多行搜索初始左右边界，为逐行边线追逐建立起点
+参数说明：
+    bottom_y：输出找到左右边界的行号
+函数返回：
+    1：找到底部左右边界
+    0：未找到可靠底部左右边界
+修改时间：2026年5月23日
+备    注：
+    先找底部最大连续白色区域，即使车身偏斜也能恢复起点。
+example：  find_bottom_border(&bottom_y);
+ */
+static uint8 find_bottom_border(int *bottom_y)
+{
+    for(int y = image_h - 2; y >= image_h - 18; y--)
+    {
+        int left = border_min;
+        int right = border_max;
 
-		}
-	}
+        if(find_longest_white_segment(y, &left, &right))
+        {
+            if(right > left)
+            {
+                l_border[y] = left;
+                r_border[y] = right;
 
+                Road_Wide[y] = right - left;
+
+                Left_Lost_Flag[y] = 0;
+                Right_Lost_Flag[y] = 0;
+
+                Left_Line_State[y] = LINE_VALID;
+                Right_Line_State[y] = LINE_VALID;
+
+                *bottom_y = y;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+函数名称：static uint8 search_left_edge_near(int y, int last_x, int scan_range, int *out_x)
+功能说明：以上一行左边界为基准，在附近搜索当前行左边界
+参数说明：
+    y：当前搜索行
+    last_x：上一行左边界
+    scan_range：左右搜索范围
+    out_x：输出找到的左边界横坐标
+函数返回：
+    1：找到左边界
+    0：未找到左边界
+修改时间：2026年5月23日
+备    注：
+    使用上一行边界附近搜索，减少远端噪声干扰。
+example：  search_left_edge_near(y, last_left, 10, &left);
+ */
+static uint8 search_left_edge_near(int y, int last_x, int scan_range, int *out_x)
+{
+    int low = limit_int(last_x - scan_range, border_min + 1, border_max - 1);
+    int high = limit_int(last_x + scan_range, border_min + 1, border_max - 1);
+
+    for(int offset = 0; offset <= scan_range; offset++)
+    {
+        int x1 = last_x - offset;
+        int x2 = last_x + offset;
+
+        if(x1 >= low && x1 <= high)
+        {
+            if(is_left_edge(y, x1))
+            {
+                *out_x = x1;
+                return 1;
+            }
+        }
+
+        if(x2 >= low && x2 <= high)
+        {
+            if(is_left_edge(y, x2))
+            {
+                *out_x = x2;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+函数名称：static uint8 search_right_edge_near(int y, int last_x, int scan_range, int *out_x)
+功能说明：以上一行右边界为基准，在附近搜索当前行右边界
+参数说明：
+    y：当前搜索行
+    last_x：上一行右边界
+    scan_range：左右搜索范围
+    out_x：输出找到的右边界横坐标
+函数返回：
+    1：找到右边界
+    0：未找到右边界
+修改时间：2026年5月23日
+备    注：
+    使用上一行边界附近搜索，减少远端噪声干扰。
+example：  search_right_edge_near(y, last_right, 10, &right);
+ */
+static uint8 search_right_edge_near(int y, int last_x, int scan_range, int *out_x)
+{
+    int low = limit_int(last_x - scan_range, border_min + 1, border_max - 1);
+    int high = limit_int(last_x + scan_range, border_min + 1, border_max - 1);
+
+    for(int offset = 0; offset <= scan_range; offset++)
+    {
+        int x1 = last_x - offset;
+        int x2 = last_x + offset;
+
+        if(x1 >= low && x1 <= high)
+        {
+            if(is_right_edge(y, x1))
+            {
+                *out_x = x1;
+                return 1;
+            }
+        }
+
+        if(x2 >= low && x2 <= high)
+        {
+            if(is_right_edge(y, x2))
+            {
+                *out_x = x2;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+函数名称：static void fill_invalid_top_area(int top_y)
+功能说明：标记顶部无效区域，防止顶部无效边线被画成竖线
+参数说明：
+    top_y：有效边线顶部行号
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+    top_y 以上区域不再复制有效边线，避免显示成竖直假边线。
+example：  fill_invalid_top_area(top_y);
+ */
+static void fill_invalid_top_area(int top_y)
+{
+    top_y = limit_int(top_y, 0, image_h - 1);
+
+    for(int y = top_y - 1; y >= 0; y--)
+    {
+        l_border[y] = border_min;
+        r_border[y] = border_max;
+        center_line[y] = image_w / 2;
+        Road_Wide[y] = border_max - border_min;
+
+        Left_Lost_Flag[y] = 1;
+        Right_Lost_Flag[y] = 1;
+
+        Left_Line_State[y] = LINE_INVALID_TOP;
+        Right_Line_State[y] = LINE_INVALID_TOP;
+    }
+}
+/*
+函数名称：static uint8 trace_border_by_previous_line(void)
+功能说明：使用逐行边线追逐法提取左右边界，并识别顶部有效行
+参数说明：无
+函数返回：
+    1：边线追逐成功
+    0：未找到可靠底部起点
+修改时间：2026年5月23日
+备    注：
+    先找底部最大连续白色区域，再根据上一行边界附近搜索当前行边界。
+    当连续丢线或道路宽度异常时，停止向上追边，并记录顶部有效行。
+example：  trace_border_by_previous_line();
+ */
+static uint8 trace_border_by_previous_line(void)
+{
+    int bottom_y = image_h - 2;
+
+    if(find_bottom_border(&bottom_y) == 0)
+    {
+        Search_Stop_Line = 0;
+        Valid_Top_Y = image_h / 2;
+        return 0;
+    }
+
+    for(int y = bottom_y + 1; y < image_h; y++)
+    {
+        l_border[y] = l_border[bottom_y];
+        r_border[y] = r_border[bottom_y];
+
+        Road_Wide[y] = r_border[y] - l_border[y];
+
+        Left_Lost_Flag[y] = 0;
+        Right_Lost_Flag[y] = 0;
+
+        Left_Line_State[y] = LINE_VALID;
+        Right_Line_State[y] = LINE_VALID;
+    }
+
+    int last_left = l_border[bottom_y];
+    int last_right = r_border[bottom_y];
+
+    int top_limit_y = image_h / 4;
+    int valid_top_y = top_limit_y;
+
+    int continuous_both_lost = 0;
+    int continuous_bad_width = 0;
+
+    for(int y = bottom_y - 1; y >= top_limit_y; y--)
+    {
+        int scan_range = 18;
+
+        if(y < image_h * 2 / 3)
+        {
+            scan_range = 14;
+        }
+
+        int left = last_left;
+        int right = last_right;
+
+        uint8 left_found = search_left_edge_near(y, last_left, scan_range, &left);
+        uint8 right_found = search_right_edge_near(y, last_right, scan_range, &right);
+
+        if(left_found)
+        {
+            l_border[y] = left;
+            Left_Lost_Flag[y] = 0;
+            Left_Line_State[y] = LINE_VALID;
+            last_left = left;
+        }
+        else
+        {
+            l_border[y] = last_left;
+            Left_Lost_Flag[y] = 1;
+            Left_Line_State[y] = LINE_LOST_WHITE;
+        }
+
+        if(right_found)
+        {
+            r_border[y] = right;
+            Right_Lost_Flag[y] = 0;
+            Right_Line_State[y] = LINE_VALID;
+            last_right = right;
+        }
+        else
+        {
+            r_border[y] = last_right;
+            Right_Lost_Flag[y] = 1;
+            Right_Line_State[y] = LINE_LOST_WHITE;
+        }
+
+        Road_Wide[y] = r_border[y] - l_border[y];
+
+        if(!left_found && !right_found)
+        {
+            continuous_both_lost++;
+        }
+        else
+        {
+            continuous_both_lost = 0;
+        }
+
+        int standard_width = get_standard_road_width(y);
+
+        if(Road_Wide[y] < standard_width * 35 / 100 ||
+           Road_Wide[y] > standard_width * 220 / 100 ||
+           l_border[y] >= r_border[y])
+        {
+            continuous_bad_width++;
+        }
+        else
+        {
+            continuous_bad_width = 0;
+        }
+
+        if(continuous_both_lost >= 4)
+        {
+            valid_top_y = y + 4;
+            break;
+        }
+
+        if(continuous_bad_width >= 4)
+        {
+            valid_top_y = y + 4;
+            break;
+        }
+
+        valid_top_y = y;
+    }
+
+    valid_top_y = limit_int(valid_top_y, top_limit_y, image_h - 2);
+
+    Valid_Top_Y = valid_top_y;
+    Search_Stop_Line = image_h - valid_top_y;
+
+    fill_invalid_top_area(valid_top_y);
+
+    return 1;
 }
 
 /*
 函数名称：void get_center_line(uint8 hightest)
-功能说明：根据左右边线提取中线，支持单边丢线时根据标准赛道宽度补中线
+功能说明：根据边线追逐结果生成中线，支持单边丢线时根据标准赛道宽度补中线
 参数说明：
-    hightest：八邻域搜索到的最高行，数值越小表示搜索得越远
+    hightest：中线有效起始行，数值越小表示看得越远
 函数返回：无
-修改时间：2026年5月20日
-example：  get_center_line(hightest);
- */   
+修改时间：2026年5月23日
+备    注：
+    配合 trace_border_by_previous_line() 使用。
+    根据顶部有效行 Valid_Top_Y 限制中线生成范围。
+example：  get_center_line(image_h - Search_Stop_Line);
+ */
 void get_center_line(uint8 hightest)
 {
     int last_center = image_w / 2;
 
+    int center_valid_top = Valid_Top_Y;
+
     hightest = limit_int(hightest, 0, image_h - 2);
+
+    if(center_valid_top < image_h * 2 / 5)
+    {
+        center_valid_top = image_h * 2 / 5;
+    }
+
+    if(hightest < center_valid_top)
+    {
+        hightest = center_valid_top;
+    }
 
     Left_Lost_Time = 0;
     Right_Lost_Time = 0;
     Both_Lost_Time = 0;
 
+    Boundry_Start_Left = 0;
+    Boundry_Start_Right = 0;
+
     for(int y = 0; y < image_h; y++)
     {
         center_line[y] = image_w / 2;
-        Road_Wide[y] = border_max - border_min;
-        Left_Lost_Flag[y] = 1;
-        Right_Lost_Flag[y] = 1;
     }
 
     for(int y = hightest; y < image_h - 1; y++)
@@ -566,15 +757,15 @@ void get_center_line(uint8 hightest)
         int left = l_border[y];
         int right = r_border[y];
 
-        int left_valid = 1;
-        int right_valid = 1;
+        int left_valid = Left_Lost_Flag[y] ? 0 : 1;
+        int right_valid = Right_Lost_Flag[y] ? 0 : 1;
 
-        if(left <= border_min + 5)
+        if(left <= border_min + 3)
         {
             left_valid = 0;
         }
 
-        if(right >= border_max - 5)
+        if(right >= border_max - 3)
         {
             right_valid = 0;
         }
@@ -583,6 +774,25 @@ void get_center_line(uint8 hightest)
         {
             left_valid = 0;
             right_valid = 0;
+        }
+
+        int standard_width = get_standard_road_width(y);
+        int half_width = standard_width / 2;
+        int road_width = right - left;
+
+        if(left_valid && right_valid)
+        {
+            if(road_width < standard_width * 45 / 100)
+            {
+                left_valid = 0;
+                right_valid = 0;
+            }
+
+            if(road_width > standard_width * 180 / 100)
+            {
+                left_valid = 0;
+                right_valid = 0;
+            }
         }
 
         Left_Lost_Flag[y] = left_valid ? 0 : 1;
@@ -603,56 +813,58 @@ void get_center_line(uint8 hightest)
             Both_Lost_Time++;
         }
 
-        
+        if(Boundry_Start_Left == 0 && !Left_Lost_Flag[y])
+        {
+            Boundry_Start_Left = y;
+        }
 
-        int standard_width = get_standard_road_width(y);
-int half_width = standard_width / 2;
+        if(Boundry_Start_Right == 0 && !Right_Lost_Flag[y])
+        {
+            Boundry_Start_Right = y;
+        }
 
-/*
-    弯道 / 疑似环岛入口偏置：
-    近处少偏，防止车身当前姿态过激；
-    远处多偏，让车头提前朝弯道内侧，也就是圆心方向靠。
-*/
-int curve_offset = standard_width / 12;
+        int center = last_center;
 
-if(y < image_h * 2 / 3)
-{
-    curve_offset = standard_width / 8;
-}
+        if(left_valid && right_valid)
+        {
+            center = (left + right) >> 1;
+            Road_Wide[y] = road_width;
+        }
+        else if(left_valid && !right_valid)
+        {
+            center = left + half_width;
+            Road_Wide[y] = standard_width;
+        }
+        else if(!left_valid && right_valid)
+        {
+            center = right - half_width;
+            Road_Wide[y] = standard_width;
+        }
+        else
+        {
+            center = last_center;
+            Road_Wide[y] = standard_width;
+        }
 
-if(left_valid && right_valid)
-{
-    center_line[y] = (left + right) >> 1;
-    Road_Wide[y] = right - left;
-}
-else if(left_valid && !right_valid)
-{
-    /*
-        右边线丢失：
-        通常对应右弯或右侧圆弧，中心线向右多推一点。
-    */
-    center_line[y] = left + half_width + curve_offset;
-    Road_Wide[y] = standard_width;
-}
-else if(!left_valid && right_valid)
-{
-    /*
-        左边线丢失：
-        通常对应左弯或左侧圆弧，中心线向左多推一点。
-    */
-    center_line[y] = right - half_width - curve_offset;
-    Road_Wide[y] = standard_width;
-}
-else
-{
-    center_line[y] = last_center;
-    Road_Wide[y] = standard_width;
-}
+        int max_center_jump = 10;
 
-center_line[y] = limit_int(center_line[y], border_min, border_max);
-last_center = center_line[y];
+        if(y < image_h * 2 / 3)
+        {
+            max_center_jump = 7;
+        }
 
-        
+        if(center > last_center + max_center_jump)
+        {
+            center = last_center + max_center_jump;
+        }
+
+        if(center < last_center - max_center_jump)
+        {
+            center = last_center - max_center_jump;
+        }
+
+        center_line[y] = limit_int(center, border_min, border_max);
+        last_center = center_line[y];
     }
 
     Search_Stop_Line = image_h - hightest;
@@ -660,44 +872,44 @@ last_center = center_line[y];
 
 /*
 函数名称：void image_process(void)
-功能说明：最终处理函数
+功能说明：图像处理主函数，使用逐行边线追逐法提取左右边线和中线
 参数说明：无
 函数返回：无
-修改时间：2026年5月20日
+修改时间：2026年5月23日
 备    注：
-example： image_process();
+    当前版本不再使用八邻域 search_l_r。
+    处理流程为：滤波、加黑框、边线追逐、顶部识别、生成中线、元素处理、重新生成中线。
+example：  image_process();
  */
 void image_process(void)
 {
-uint8 hightest = 0;//定义一个最高行，tip：这里的最高指的是y值的最小
-image_filter(bin_image);//滤波
-image_draw_black_rect();//预处理
-//清零
-data_stastics_l = 0;
-data_stastics_r = 0;
-if (get_start_point(image_h - 2))//找到起点了，再执行八领域，没找到就一直找
-{
-	printf("正在开始八领域\n");
-	search_l_r((uint16)USE_num, bin_image, &data_stastics_l, &data_stastics_r, start_point_l[0], start_point_l[1], start_point_r[0], start_point_r[1], &hightest);
-	printf("八邻域已结束\n");
-	// 从爬取的边界线内提取边线 ， 这个才是最终有用的边线
-	get_left(data_stastics_l);
-	get_right(data_stastics_r);
-    get_center_line(hightest);//获取中线
+    image_filter(bin_image);
 
-    element_process();//元素识别
+    image_draw_black_rect();
 
-    get_center_line(hightest);//重新生成中线
-	//处理函数放这里，不要放到if外面去了，不要放到if外面去了，不要放到if外面去了，重要的事说三遍
+    if(trace_border_by_previous_line())
+    {
+        int hightest = image_h - Search_Stop_Line;
 
-}
+        get_center_line((uint8)hightest);
+
+        element_process();
+
+        get_center_line((uint8)hightest);
+    }
 }
 
-// =====================================================
-// 对外主入口
-// bin_src 必须已经是二值图
-// main.cpp 里应先调用 camera.cpp 的 otsu_threshold()
-// =====================================================
+/*
+函数名称：void image_process_from_bin_ptr(uint8 *bin_src)
+功能说明：图像处理对外主入口，输入一维二值图并提取边线和中线
+参数说明：
+    bin_src：一维二值图指针，图像必须已经完成二值化
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+    main.cpp 中应先调用 otsu_threshold(gray_image)，再调用本函数。
+example：  image_process_from_bin_ptr(gray_image);
+ */
 void image_process_from_bin_ptr(uint8 *bin_src)
 {
     if(bin_src == NULL)
@@ -712,10 +924,16 @@ void image_process_from_bin_ptr(uint8 *bin_src)
     image_process();
 }
 
-
-// =====================================================
-// 兼容旧名字
-// =====================================================
+/*
+函数名称：void image_process_by_white_column(uint8 *bin_src)
+功能说明：兼容旧接口，内部调用 image_process_from_bin_ptr
+参数说明：
+    bin_src：一维二值图指针
+函数返回：无
+修改时间：2026年5月23日
+备    注：
+example：  image_process_by_white_column(gray_image);
+ */
 void image_process_by_white_column(uint8 *bin_src)
 {
     image_process_from_bin_ptr(bin_src);

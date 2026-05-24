@@ -3,8 +3,8 @@
 #include "element.hpp"
 
 // 左右轮目标速度
-static int wheel_target_right = 0;
-static int wheel_target_left  = 0;
+ int wheel_target_right = 0;
+ int wheel_target_left  = 0;
 
 // 巡线误差和转向输出
 static float Err = 0.0f;
@@ -28,7 +28,7 @@ static float Pre1_Error[4] = {0, 0, 0, 0};
 // 差速放大系数
 // 转向力度不够就加大，比如 1.5 / 2.0 / 2.5
 // =====================================================
-static float diff_gain = 4.0f;
+static float diff_gain = 5.0f;
 
 
 // 方向修正
@@ -58,7 +58,73 @@ static int abs_int(int value)
     return value >= 0 ? value : -value;
 }
 
+/*
+函数名称：static int get_speed_by_error(int base_speed, int abs_err)
+功能说明：根据巡线误差绝对值无级调整运行速度，误差越大速度越低
+参数说明：
+    base_speed：基础速度
+    abs_err：巡线误差绝对值
+函数返回：调整后的运行速度
+修改时间：2026年5月24日
+备注：
+    当误差小于 min_err 时，保持基础速度；
+    当误差大于 max_err 时，降低到最低比例；
+    中间区域按线性比例连续降速。
+example：  get_speed_by_error(base_speed, abs_err);
+ */
+static int get_speed_by_error(int base_speed, int abs_err)
+{
+    /*
+        小误差范围内不降速。
+        这里对应你原来的 abs_err <= 8。
+    */
+    int min_err = 8;
 
+    /*
+        大误差时降到最低速度。
+        这里对应你原来的 abs_err > 45。
+    */
+    int max_err = 45;
+
+    /*
+        最低速度比例。
+        35 表示 base_speed 的 35%。
+    */
+    int min_percent = 30;
+
+    /*
+        最高速度比例。
+        100 表示 base_speed 的 100%。
+    */
+    int max_percent = 100;
+
+    abs_err = limit_int(abs_err, 0, max_err);
+
+    int speed_percent = max_percent;
+
+    if(abs_err <= min_err)
+    {
+        speed_percent = max_percent;
+    }
+    else if(abs_err >= max_err)
+    {
+        speed_percent = min_percent;
+    }
+    else
+    {
+        /*
+            线性降速：
+            abs_err 从 8 增加到 45 时，
+            speed_percent 从 100 平滑降低到 35。
+        */
+        speed_percent = max_percent
+                      - (abs_err - min_err) * (max_percent - min_percent) / (max_err - min_err);
+    }
+
+    int run_speed = base_speed * speed_percent / 100;
+
+    return run_speed;
+}
 // =====================================================
 // 行权重
 // =====================================================
@@ -76,15 +142,15 @@ static int get_weight_by_y(int y)
     }
     else if(y < image_h * 1 / 2)
     {
-        return 2;
+        return 4;
     }
     else if(y < image_h * 2 / 3)
     {
-        return 8;
+        return 10;
     }
     else if(y < image_h * 5 / 6)
     {
-        return 16;
+        return 20;
     }
     else
     {
@@ -241,38 +307,19 @@ void trackline_refresh_wheel_targets(int base_speed, int aim_y)
     int abs_err = abs_int((int)Err);
     int run_speed = base_speed;
 
-    if(abs_err > 45)
-    {
-        run_speed = base_speed * 35 / 100;
-    }
-    else if(abs_err > 35)
-    {
-        run_speed = base_speed * 50 / 100;
-    }
-    else if(abs_err > 25)
-    {
-        run_speed = base_speed * 65 / 100;
-    }
-    else if(abs_err > 15)
-    {
-        run_speed = base_speed * 80 / 100;
-    }
-    else if(abs_err > 8)
-    {
-        run_speed = base_speed * 90 / 100;
-    }
+    run_speed = get_speed_by_error(base_speed, abs_err);
     
     run_speed = limit_int(run_speed, 50, 300);
 
     float increase = -turn_output * diff_gain * TRACK_DIR;
 
-    int diff = limit_int((int)increase, -600, 600);
+    int diff = limit_int((int)increase, -800, 800);
 
     wheel_target_left  = run_speed - diff;
     wheel_target_right = run_speed + diff;
 
-    wheel_target_left  = limit_int(wheel_target_left,  0, 800);
-    wheel_target_right = limit_int(wheel_target_right, 0, 800);
+    wheel_target_left  = limit_int(wheel_target_left,  -800, 800);
+    wheel_target_right = limit_int(wheel_target_right, -800, 800);
 }
 
 

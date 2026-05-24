@@ -334,8 +334,7 @@ int main(int, char **)
         // 7. 巡线
         // =====================================================
         
-        trackline_refresh_wheel_targets(00, UVC_HEIGHT - 20);
-
+        trackline_refresh_wheel_targets(400, UVC_HEIGHT - 45);
             pid_speed_set_target(
                 trackline_wheel_target_right(),
                 trackline_wheel_target_left()

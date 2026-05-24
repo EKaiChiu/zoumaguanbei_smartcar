@@ -21,7 +21,7 @@ static int target_speed_left  = 0;
 #define MAX_PWM_PERCENT      35
 
 
-#define PID_OUTPUT_LIMIT     700
+#define PID_OUTPUT_LIMIT     800
 
 
 // =====================================================

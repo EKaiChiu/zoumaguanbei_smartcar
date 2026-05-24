@@ -109,21 +109,9 @@ void zebra_stripes_detect(uint8 (*bin_img)[image_w], uint8 *l_border, uint8 *r_b
         return;
     }
 
-    int start_line = 0;
-    int end_line = 0;
-
     /*
-        原代码依赖：
-        Search_Stop_Line >= 60
-        Longest_White_Column 在中心
-        Boundry_Start 靠下
-
-        你当前八邻域没有这些变量。
-        所以这里改成直接检查图像中下部区域。
-
-        image_h = 120 时：
-        y_start 大约 95
-        y_end   大约 35
+        只检测中下部区域。
+        image_h = 120 时，大约检测 y = 35 ~ 95。
     */
     int y_start = image_h * 4 / 5;
     int y_end   = image_h / 3;
@@ -131,10 +119,10 @@ void zebra_stripes_detect(uint8 (*bin_img)[image_w], uint8 *l_border, uint8 *r_b
     y_start = limit_int(y_start, 0, image_h - 1);
     y_end   = limit_int(y_end,   0, image_h - 1);
 
-    /*
-        1. 找赛道明显变窄的行。
-        斑马线区域因为有很多横向黑白条纹，会导致扫描出来的道路宽度变窄或不稳定。
-    */
+    int valid_line_count = 0;
+    int stripe_line_count = 0;
+    int black_block_line_count = 0;
+
     for(int y = y_start; y >= y_end; y--)
     {
         if(!border_is_valid(y, l_border, r_border))
@@ -142,100 +130,66 @@ void zebra_stripes_detect(uint8 (*bin_img)[image_w], uint8 *l_border, uint8 *r_b
             continue;
         }
 
-        int road_width = r_border[y] - l_border[y];
-        int standard_width = get_standard_road_width(y);
-
-        /*
-            原代码：
-            if((Standard_Road_Wide[i] - Road_Wide[i]) > 10)
-
-            这里保留这个思想。
-            如果当前宽度比标准宽度小很多，认为这一行疑似斑马线。
-        */
-        if((standard_width - road_width) > image_w / 16)
-        {
-            zebra_narrow_count++;
-
-            if(zebra_narrow_count >= 5)
-            {
-                start_line = y;
-                break;
-            }
-        }
-    }
-
-    /*
-        没有连续多行变窄，不认为是斑马线。
-    */
-    if(start_line == 0)
-    {
-        return;
-    }
-
-    /*
-        2. 以变窄行为中心，划一个区域统计黑白跳变。
-        原代码：
-        start_line = start_line + 8;
-        end_line = start_line - 15;
-    */
-    start_line = start_line + 8;
-    end_line = start_line - 15;
-
-    start_line = limit_int(start_line, 0, image_h - 1);
-    end_line   = limit_int(end_line,   0, image_h - 1);
-
-    if(start_line < end_line)
-    {
-        int temp = start_line;
-        start_line = end_line;
-        end_line = temp;
-    }
-
-    /*
-        3. 在左右边界之间统计黑白跳变次数。
-        斑马线的典型特征就是横向扫描时黑白跳变很多。
-    */
-    for(int y = start_line; y >= end_line; y--)
-    {
-        if(!border_is_valid(y, l_border, r_border))
-        {
-            continue;
-        }
-
-        int left = l_border[y];
-        int right = r_border[y];
+        int left = l_border[y] + 3;
+        int right = r_border[y] - 3;
 
         left = limit_int(left, 0, image_w - 2);
         right = limit_int(right, 1, image_w - 1);
 
-        if(right <= left + 2)
+        if(right <= left + 10)
         {
             continue;
         }
 
+        valid_line_count++;
+
+        int change_count_line = 0;
+        int black_count_line = 0;
+
         for(int x = left; x < right - 1; x++)
         {
+            if(bin_img[y][x] == black_pixel)
+            {
+                black_count_line++;
+            }
+
             if(bin_img[y][x + 1] != bin_img[y][x])
             {
-                zebra_change_count++;
+                change_count_line++;
             }
+        }
+
+        zebra_change_count += change_count_line;
+
+        /*
+            斑马线特点：
+            1. 一行内黑白跳变多；
+            2. 赛道内部黑色像素不少；
+            3. 多行连续出现。
+        */
+        int road_width = right - left;
+
+        if(change_count_line >= 4)
+        {
+            stripe_line_count++;
+        }
+
+        if(black_count_line >= road_width / 8)
+        {
+            black_block_line_count++;
         }
     }
 
     /*
-        原代码：
-        if(change_count > 30)
-
-        这里先保留 30。
-        如果误识别多，就提高到 40 / 50。
-        如果识别不到，就降低到 20。
+        这里不要只看总 change_count。
+        因为远处噪声也会让 change_count 增大。
+        要求多行满足条纹特征更稳。
     */
-    if(zebra_change_count > 30)
+    if(stripe_line_count >= 3 && black_block_line_count >= 3)
     {
         Zebra_Stripes_Flag = 1;
     }
 }
-
 
 int zebra_stripes_is_found(void)
 {
