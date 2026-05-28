@@ -18,10 +18,10 @@ static int target_speed_left  = 0;
 #define BASE_PWM_PERCENT_R   14
 #define BASE_PWM_PERCENT_L   14
 
-#define MAX_PWM_PERCENT      35
+#define MAX_PWM_PERCENT      65
 
 
-#define PID_OUTPUT_LIMIT     800
+#define PID_OUTPUT_LIMIT     1000
 
 
 // =====================================================

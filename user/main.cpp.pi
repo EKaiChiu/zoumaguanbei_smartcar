@@ -1,0 +1,502 @@
+#include "zf_common_headfile.hpp"
+#include "../code/pid.hpp"
+
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <csignal>
+#include <chrono>
+#include <sys/select.h>
+#include <unistd.h>
+#include <cctype>
+
+#define CONTROL_PERIOD_MS       20
+#define PRINT_INTERVAL_MS       100
+
+#define DEFAULT_KP              10.0f
+#define DEFAULT_KI              0.0f
+#define DEFAULT_KD              0.0f
+
+#define MIN_TARGET_SPEED        0
+#define MAX_TARGET_SPEED        800
+
+static volatile sig_atomic_t program_running = 1;
+
+static int target_speed_right = 0;
+static int target_speed_left = 0;
+
+static float current_kp = DEFAULT_KP;
+static float current_ki = DEFAULT_KI;
+static float current_kd = DEFAULT_KD;
+
+extern pid_class RSPID;
+extern pid_class LSPID;
+
+/*
+函数名称：static int limit_int_local(int value, int min_value, int max_value)
+功能说明：限制整数变量范围
+参数说明：
+    value：输入值
+    min_value：最小值
+    max_value：最大值
+函数返回：限幅后的整数
+修改时间：2026年5月24日
+备注：
+example：  limit_int_local(speed, 0, 800);
+ */
+static int limit_int_local(int value, int min_value, int max_value)
+{
+    if(value < min_value)
+    {
+        value = min_value;
+    }
+
+    if(value > max_value)
+    {
+        value = max_value;
+    }
+
+    return value;
+}
+
+/*
+函数名称：static std::string to_upper_string(std::string text)
+功能说明：将字符串转为大写
+参数说明：
+    text：输入字符串
+函数返回：大写字符串
+修改时间：2026年5月24日
+备注：
+example：  to_upper_string(command);
+ */
+static std::string to_upper_string(std::string text)
+{
+    for(size_t i = 0; i < text.size(); i++)
+    {
+        text[i] = (char)std::toupper((unsigned char)text[i]);
+    }
+
+    return text;
+}
+
+/*
+函数名称：static int stdin_has_line(void)
+功能说明：检测终端是否有输入，避免阻塞主循环
+参数说明：无
+函数返回：
+    1：有输入
+    0：无输入
+修改时间：2026年5月24日
+备注：
+example：  stdin_has_line();
+ */
+static int stdin_has_line(void)
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+
+    int result = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &timeout);
+
+    if(result > 0 && FD_ISSET(STDIN_FILENO, &readfds))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+/*
+函数名称：static void clear_pid_state(void)
+功能说明：清空左右轮 PID 内部状态
+参数说明：无
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  clear_pid_state();
+ */
+static void clear_pid_state(void)
+{
+    RSPID.Error = 0;
+    RSPID.LastError = 0;
+    RSPID.PrevError = 0;
+    RSPID.Error_all = 0;
+    RSPID.P_out = 0;
+    RSPID.I_out = 0;
+    RSPID.D_out = 0;
+    RSPID.output = 0;
+
+    LSPID.Error = 0;
+    LSPID.LastError = 0;
+    LSPID.PrevError = 0;
+    LSPID.Error_all = 0;
+    LSPID.P_out = 0;
+    LSPID.I_out = 0;
+    LSPID.D_out = 0;
+    LSPID.output = 0;
+}
+
+/*
+函数名称：static void signal_handler(int signum)
+功能说明：捕获 Ctrl+C 退出信号
+参数说明：
+    signum：信号编号
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  signal(SIGINT, signal_handler);
+ */
+static void signal_handler(int signum)
+{
+    (void)signum;
+    program_running = 0;
+}
+
+/*
+函数名称：static void stop_motor_keep_pit(void)
+功能说明：停车但不停止 PIT
+参数说明：无
+函数返回：无
+修改时间：2026年5月24日
+备注：
+    调参过程中 PIT 保持运行，只把目标速度清零。
+example：  stop_motor_keep_pit();
+ */
+static void stop_motor_keep_pit(void)
+{
+    target_speed_right = 0;
+    target_speed_left = 0;
+
+    pid_speed_set_target(0, 0);
+
+    clear_pid_state();
+
+    encoder_right = 0;
+    encoder_left = 0;
+
+    encoder_dir_1.clear_count();
+    encoder_dir_2.clear_count();
+
+    drv8701e_pwm_1.set_duty(0);
+    drv8701e_pwm_2.set_duty(0);
+}
+
+/*
+函数名称：static void final_stop(void)
+功能说明：退出程序时停止 PIT 并关闭电机
+参数说明：无
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  final_stop();
+ */
+static void final_stop(void)
+{
+    stop_motor_keep_pit();
+
+    pid_speed_stop();
+
+    drv8701e_pwm_1.set_duty(0);
+    drv8701e_pwm_2.set_duty(0);
+
+    std::cout << "PID_TUNE_EXIT motor stopped" << std::endl;
+}
+
+/*
+函数名称：static void apply_pid_param(float kp, float ki, float kd)
+功能说明：设置速度环 PID 参数
+参数说明：
+    kp：比例系数
+    ki：积分系数
+    kd：微分系数
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  apply_pid_param(10, 0.005, 0);
+ */
+static void apply_pid_param(float kp, float ki, float kd)
+{
+    current_kp = kp;
+    current_ki = ki;
+    current_kd = kd;
+
+    pid_init(&RSPID, current_kp, current_ki, current_kd);
+    pid_init(&LSPID, current_kp, current_ki, current_kd);
+
+    clear_pid_state();
+
+    pid_speed_set_target(target_speed_right, target_speed_left);
+
+    std::cout << "OK PARAM"
+              << " kp=" << current_kp
+              << " ki=" << current_ki
+              << " kd=" << current_kd
+              << std::endl;
+}
+
+/*
+函数名称：static void set_speed_target(int right, int left)
+功能说明：设置左右轮目标速度
+参数说明：
+    right：右轮目标速度
+    left：左轮目标速度
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  set_speed_target(200, 200);
+ */
+static void set_speed_target(int right, int left)
+{
+    target_speed_right = limit_int_local(right, MIN_TARGET_SPEED, MAX_TARGET_SPEED);
+    target_speed_left = limit_int_local(left, MIN_TARGET_SPEED, MAX_TARGET_SPEED);
+
+    clear_pid_state();
+
+    encoder_right = 0;
+    encoder_left = 0;
+
+    encoder_dir_1.clear_count();
+    encoder_dir_2.clear_count();
+
+    pid_speed_set_target(target_speed_right, target_speed_left);
+
+    std::cout << "OK SPEED"
+              << " right=" << target_speed_right
+              << " left=" << target_speed_left
+              << std::endl;
+}
+
+/*
+函数名称：static void change_speed_target(int delta)
+功能说明：在当前目标速度基础上增减速度
+参数说明：
+    delta：速度变化量，正数增加，负数减少
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  change_speed_target(50);
+ */
+static void change_speed_target(int delta)
+{
+    int new_right = target_speed_right + delta;
+    int new_left = target_speed_left + delta;
+
+    set_speed_target(new_right, new_left);
+}
+
+/*
+函数名称：static void print_status(void)
+功能说明：打印当前 PID 和轮速状态
+参数说明：无
+函数返回：无
+修改时间：2026年5月24日
+备注：
+    DATA 行供 Claude Code 分析。
+example：  print_status();
+ */
+static void print_status(void)
+{
+    int err_r = pid_get_target_right() - encoder_right;
+    int err_l = pid_get_target_left() - encoder_left;
+
+    std::cout << "DATA"
+              << " kp=" << current_kp
+              << " ki=" << current_ki
+              << " kd=" << current_kd
+              << " targetR=" << pid_get_target_right()
+              << " actualR=" << encoder_right
+              << " errR=" << err_r
+              << " outR=" << RSPID.output
+              << " targetL=" << pid_get_target_left()
+              << " actualL=" << encoder_left
+              << " errL=" << err_l
+              << " outL=" << LSPID.output
+              << std::endl;
+}
+
+/*
+函数名称：static void print_help(void)
+功能说明：打印命令帮助
+参数说明：无
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  print_help();
+ */
+static void print_help(void)
+{
+    std::cout << "COMMANDS:" << std::endl;
+    std::cout << "  PARAM kp ki kd        set PID, example: PARAM 10 0.005 0" << std::endl;
+    std::cout << "  SPEED v               set both wheels speed, example: SPEED 200" << std::endl;
+    std::cout << "  SPEED r l             set right and left speed, example: SPEED 200 210" << std::endl;
+    std::cout << "  UP step               increase speed, example: UP 50" << std::endl;
+    std::cout << "  DOWN step             decrease speed, example: DOWN 50" << std::endl;
+    std::cout << "  STOP                  stop motor" << std::endl;
+    std::cout << "  SHOW                  print status once" << std::endl;
+    std::cout << "  HELP                  show help" << std::endl;
+    std::cout << "  QUIT                  exit" << std::endl;
+}
+
+/*
+函数名称：static void handle_command(const std::string &line)
+功能说明：解析并执行终端命令
+参数说明：
+    line：终端输入的一行字符串
+函数返回：无
+修改时间：2026年5月24日
+备注：
+example：  handle_command(line);
+ */
+static void handle_command(const std::string &line)
+{
+    std::stringstream ss(line);
+
+    std::string command;
+    ss >> command;
+
+    command = to_upper_string(command);
+
+    if(command.size() == 0)
+    {
+        return;
+    }
+
+    if(command == "PARAM")
+    {
+        float kp;
+        float ki;
+        float kd;
+
+        if(ss >> kp >> ki >> kd)
+        {
+            apply_pid_param(kp, ki, kd);
+        }
+        else
+        {
+            std::cout << "ERR PARAM_USAGE PARAM kp ki kd" << std::endl;
+        }
+    }
+    else if(command == "SPEED")
+    {
+        int right;
+        int left;
+
+        if(ss >> right)
+        {
+            if(ss >> left)
+            {
+                set_speed_target(right, left);
+            }
+            else
+            {
+                set_speed_target(right, right);
+            }
+        }
+        else
+        {
+            std::cout << "ERR SPEED_USAGE SPEED v OR SPEED r l" << std::endl;
+        }
+    }
+    else if(command == "UP")
+    {
+        int step;
+
+        if(ss >> step)
+        {
+            change_speed_target(step);
+        }
+        else
+        {
+            change_speed_target(50);
+        }
+    }
+    else if(command == "DOWN")
+    {
+        int step;
+
+        if(ss >> step)
+        {
+            change_speed_target(-step);
+        }
+        else
+        {
+            change_speed_target(-50);
+        }
+    }
+    else if(command == "STOP")
+    {
+        stop_motor_keep_pit();
+        std::cout << "OK STOP" << std::endl;
+    }
+    else if(command == "SHOW")
+    {
+        print_status();
+    }
+    else if(command == "HELP")
+    {
+        print_help();
+    }
+    else if(command == "QUIT" || command == "EXIT")
+    {
+        program_running = 0;
+    }
+    else
+    {
+        std::cout << "ERR UNKNOWN_COMMAND " << command << std::endl;
+    }
+}
+
+int main(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    signal(SIGINT, signal_handler);
+
+    system("clear");
+
+    std::cout << "PID_INTERACTIVE_TUNE_READY" << std::endl;
+    std::cout << "WARNING: wheels must be lifted." << std::endl;
+    std::cout << "Type HELP for commands." << std::endl;
+
+    drv8701e_pwm_1.get_dev_info(&drv8701e_pwm_1_info);
+    drv8701e_pwm_2.get_dev_info(&drv8701e_pwm_2_info);
+
+    pid_speed_init(current_kp, current_ki, current_kd, 0, 0);
+    pid_speed_start(CONTROL_PERIOD_MS);
+
+    stop_motor_keep_pit();
+
+    auto last_print_time = std::chrono::steady_clock::now();
+
+    while(program_running)
+    {
+        if(stdin_has_line())
+        {
+            std::string line;
+            std::getline(std::cin, line);
+            handle_command(line);
+        }
+
+        auto now = std::chrono::steady_clock::now();
+
+        int print_elapsed_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count();
+
+        if(print_elapsed_ms >= PRINT_INTERVAL_MS)
+        {
+            last_print_time = now;
+            print_status();
+        }
+
+        system_delay_ms(20);
+    }
+
+    final_stop();
+
+    return 0;
+}

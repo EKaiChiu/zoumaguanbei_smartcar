@@ -13,13 +13,9 @@ typedef enum
 } KeyValue;
 
 void Key_Process(void);
-
 bool Key_IsPressed(void);
-
 int Key_GetValue(void);
-
 int Key_GetValueOnce(void);
-
 int Key_GetPressCount(void);
 
 #endif
