@@ -1,22 +1,30 @@
 #include "config.hpp"
-#include "zf_common_headfile.hpp"
 
 CarConfig car_config;
 
 /*
 函数名称：void config_init(void)
-功能说明：初始化智能车可调参数
+功能说明：初始化车辆运行配置
 参数说明：无
 函数返回：无
-修改时间：2026年5月25日
+修改时间：2026年5月29日
 备注：
-    所有菜单可调参数的默认值都在这里设置。
+    work_mode 在这里固定。
+    改完模式后需要重新编译下载。
 example：  config_init();
  */
 void config_init(void)
 {
-    car_config.run_speed = 400;
+    /*
+        在这里选择当前程序模式：
 
+        CAR_MODE_RACE       比赛模式
+        CAR_MODE_TUNE       调车模式
+        CAR_MODE_IMAGE_TEST 图像测试模式
+     */
+    car_config.work_mode = CAR_MODE_TUNE;
+
+    car_config.run_speed = 400;
     car_config.aim_y = 75;
 
     car_config.speed_kp = 10.0;
@@ -29,4 +37,29 @@ void config_init(void)
 
     car_config.diff_gain = 5.0;
     car_config.diff_speed_lim = 800.0;
+}
+
+int config_is_race_mode(void)
+{
+    return car_config.work_mode == CAR_MODE_RACE;
+}
+
+int config_is_tune_mode(void)
+{
+    return car_config.work_mode == CAR_MODE_TUNE;
+}
+
+int config_is_image_test_mode(void)
+{
+    return car_config.work_mode == CAR_MODE_IMAGE_TEST;
+}
+
+int config_motor_enable(void)
+{
+    if(car_config.work_mode == CAR_MODE_IMAGE_TEST)
+    {
+        return 0;
+    }
+
+    return 1;
 }
